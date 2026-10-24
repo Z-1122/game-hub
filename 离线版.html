@@ -1,0 +1,408 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>游戏小屋（离线版）</title>
+<meta name="description" content="自己写的小游戏合集" />
+<style>
+  :root {
+    color-scheme: dark;
+    --bg: #05070e;
+    --panel: rgba(255, 255, 255, 0.035);
+    --panel-hover: rgba(255, 255, 255, 0.06);
+    --line: rgba(120, 200, 255, 0.12);
+    --text: #e8f4ff;
+    --muted: rgba(150, 190, 220, 0.62);
+    --accent: #5ff0ff;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    min-height: 100vh;
+    background:
+      radial-gradient(circle at 20% 0%, rgba(40, 110, 170, 0.20) 0%, transparent 55%),
+      radial-gradient(circle at 85% 15%, rgba(120, 90, 200, 0.16) 0%, transparent 50%),
+      var(--bg);
+    color: var(--text);
+    font-family: "Microsoft YaHei", "PingFang SC", "Hiragino Sans GB", system-ui, sans-serif;
+    -webkit-font-smoothing: antialiased;
+    overflow-x: hidden;
+  }
+
+  /* 背景网格 */
+  .grid-bg {
+    position: fixed; inset: 0; z-index: 0; pointer-events: none;
+    background-image:
+      linear-gradient(rgba(96, 168, 224, 0.045) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(96, 168, 224, 0.045) 1px, transparent 1px);
+    background-size: 48px 48px;
+    mask-image: radial-gradient(circle at 50% 30%, #000 0%, transparent 78%);
+    -webkit-mask-image: radial-gradient(circle at 50% 30%, #000 0%, transparent 78%);
+  }
+
+  .wrap { position: relative; z-index: 1; max-width: 1120px; margin: 0 auto; padding: 56px 24px 72px; }
+
+  /* ---- 头部 ---- */
+  header { margin-bottom: 48px; }
+  .brand {
+    display: inline-flex; align-items: center; gap: 12px;
+    font-size: 13px; letter-spacing: 0.32em; text-transform: uppercase;
+    color: var(--accent); opacity: 0.7; margin-bottom: 20px;
+  }
+  .brand::before {
+    content: ""; width: 26px; height: 1px;
+    background: linear-gradient(90deg, transparent, var(--accent));
+  }
+  h1 {
+    font-size: clamp(38px, 6vw, 60px);
+    font-weight: 800; line-height: 1.08; letter-spacing: -0.01em;
+    text-shadow: 0 0 42px rgba(95, 240, 255, 0.34);
+  }
+  h1 .glow {
+    background: linear-gradient(120deg, #5ff0ff 10%, #a98bff 90%);
+    -webkit-background-clip: text; background-clip: text;
+    -webkit-text-fill-color: transparent;
+  }
+  .sub { margin-top: 14px; font-size: 15px; color: var(--muted); }
+
+  .stats {
+    display: flex; gap: 28px; margin-top: 26px; flex-wrap: wrap;
+    font-size: 13px; color: var(--muted);
+  }
+  .stats b { color: var(--text); font-weight: 700; font-size: 17px; margin-right: 5px; }
+
+  /* ---- 游戏卡片 ---- */
+  .grid {
+    display: grid; gap: 22px;
+    grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+  }
+
+  .card {
+    position: relative; display: block; text-decoration: none; color: inherit;
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: 16px; padding: 26px 24px 22px;
+    transition: transform .22s cubic-bezier(.2,.8,.3,1), border-color .22s, background .22s, box-shadow .22s;
+    overflow: hidden;
+  }
+  /* 顶部高光条 */
+  .card::before {
+    content: ""; position: absolute; top: 0; left: 24px; right: 24px; height: 2px;
+    background: linear-gradient(90deg, transparent, var(--c1), var(--c2), transparent);
+    opacity: 0.5; transition: opacity .22s;
+  }
+  /* 悬浮光晕 */
+  .card::after {
+    content: ""; position: absolute; inset: -1px; border-radius: 16px; pointer-events: none;
+    background: radial-gradient(circle at 50% 0%, var(--c1), transparent 62%);
+    opacity: 0; transition: opacity .25s;
+  }
+  .card:hover, .card:focus-visible {
+    transform: translateY(-5px);
+    background: var(--panel-hover);
+    border-color: color-mix(in srgb, var(--c1) 45%, transparent);
+    box-shadow: 0 20px 50px -22px var(--c1);
+    outline: none;
+  }
+  .card:hover::before, .card:focus-visible::before { opacity: 1; }
+  .card:hover::after, .card:focus-visible::after { opacity: 0.11; }
+
+  .card-top { display: flex; align-items: center; gap: 14px; margin-bottom: 16px; }
+  .icon {
+    flex: none; width: 46px; height: 46px; border-radius: 12px;
+    display: grid; place-items: center; font-size: 22px;
+    background: linear-gradient(135deg, var(--c1), var(--c2));
+    color: #05070e; font-weight: 700;
+    box-shadow: 0 0 26px -6px var(--c1);
+  }
+  .card h2 { font-size: 20px; font-weight: 700; letter-spacing: 0.01em; }
+  .card .tagline { font-size: 12.5px; color: var(--muted); margin-top: 3px; }
+
+  .card p.desc {
+    font-size: 13.5px; line-height: 1.72; color: rgba(196, 220, 238, 0.76);
+    margin-bottom: 18px;
+  }
+
+  .tags { display: flex; gap: 7px; flex-wrap: wrap; margin-bottom: 16px; }
+  .tag {
+    font-size: 11px; padding: 3px 10px; border-radius: 999px;
+    color: color-mix(in srgb, var(--c1) 85%, #fff);
+    background: color-mix(in srgb, var(--c1) 12%, transparent);
+    border: 1px solid color-mix(in srgb, var(--c1) 28%, transparent);
+  }
+
+  .controls {
+    font-size: 11.5px; color: var(--muted);
+    padding-top: 14px; border-top: 1px solid var(--line);
+    display: flex; align-items: center; gap: 8px;
+  }
+  .controls span.k {
+    font-family: ui-monospace, "Cascadia Code", Consolas, monospace;
+    color: rgba(200, 228, 245, 0.8);
+  }
+
+  .play-hint {
+    position: absolute; right: 22px; bottom: 20px;
+    font-size: 12px; font-weight: 600;
+    color: var(--c1); opacity: 0;
+    transform: translateX(-6px);
+    transition: opacity .22s, transform .22s;
+  }
+  .card:hover .play-hint, .card:focus-visible .play-hint { opacity: 1; transform: translateX(0); }
+
+  .badge-featured {
+    position: absolute; top: 18px; right: 20px;
+    font-size: 10px; letter-spacing: 0.12em; font-weight: 700;
+    padding: 3px 9px; border-radius: 999px;
+    color: #05070e; background: linear-gradient(135deg, var(--c1), var(--c2));
+  }
+
+  /* ---- 添加游戏提示 ---- */
+  .howto {
+    margin-top: 52px; padding: 26px 28px;
+    background: var(--panel); border: 1px solid var(--line); border-radius: 16px;
+  }
+  .howto h3 {
+    font-size: 13px; letter-spacing: 0.14em; text-transform: uppercase;
+    color: var(--accent); opacity: 0.75; margin-bottom: 16px;
+  }
+  .howto ol { list-style: none; counter-reset: step; }
+  .howto li {
+    counter-increment: step; position: relative;
+    padding-left: 34px; margin-bottom: 13px;
+    font-size: 13.5px; line-height: 1.65; color: rgba(196, 220, 238, 0.78);
+  }
+  .howto li::before {
+    content: counter(step);
+    position: absolute; left: 0; top: 1px;
+    width: 21px; height: 21px; border-radius: 50%;
+    display: grid; place-items: center;
+    font-size: 11px; font-weight: 700; color: #05070e;
+    background: linear-gradient(135deg, var(--accent), #a98bff);
+  }
+  code {
+    font-family: ui-monospace, "Cascadia Code", Consolas, monospace;
+    font-size: 12.5px; padding: 2px 7px; border-radius: 5px;
+    background: rgba(120, 200, 255, 0.10);
+    color: #9fe8ff; border: 1px solid rgba(120, 200, 255, 0.16);
+  }
+
+  footer {
+    margin-top: 56px; padding-top: 26px;
+    border-top: 1px solid var(--line);
+    display: flex; justify-content: space-between; align-items: center;
+    flex-wrap: wrap; gap: 14px;
+    font-size: 12.5px; color: var(--muted);
+  }
+  footer a { color: var(--accent); text-decoration: none; opacity: 0.85; }
+  footer a:hover { opacity: 1; text-decoration: underline; }
+
+  .empty { text-align: center; padding: 60px 20px; color: var(--muted); }
+
+  /* ---- 入场动画 ---- */
+  @keyframes rise {
+    from { opacity: 0; transform: translateY(18px); }
+    to { opacity: 1; transform: translateY(0); }
+  }
+  .anim { animation: rise .5s cubic-bezier(.2,.8,.3,1) backwards; }
+
+  @media (max-width: 560px) {
+    .wrap { padding: 36px 18px 56px; }
+    header { margin-bottom: 34px; }
+    .grid { grid-template-columns: 1fr; }
+    .stats { gap: 18px; }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    * { animation: none !important; transition: none !important; }
+  }
+</style>
+</head>
+<body>
+<div class="grid-bg"></div>
+
+<div class="wrap">
+  
+<div id="offline-note" style="
+  position:relative;z-index:2;margin:0 0 26px;padding:12px 16px;border-radius:10px;
+  background:rgba(95,240,255,0.07);border:1px solid rgba(95,240,255,0.22);
+  font-size:13px;line-height:1.6;color:rgba(190,225,245,0.85);
+  display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
+  <span style="flex:1;min-width:200px;">
+    📴 离线版 —— 数据已内嵌，双击即可用。
+    <span style="opacity:.7">在线版（可自动更新）在
+    <a href="https://z-1122.github.io/game-hub/" target="_blank" rel="noopener"
+       style="color:#5ff0ff;text-decoration:none;">z-1122.github.io/game-hub</a></span>
+  </span>
+  <button onclick="this.parentNode.remove()" style="
+    background:none;border:1px solid rgba(120,200,255,0.25);border-radius:6px;
+    color:rgba(190,225,245,0.7);font-size:12px;padding:3px 10px;cursor:pointer;
+    font-family:inherit;">知道了</button>
+</div>
+
+  <header>
+    <div class="brand">Game Hub · 离线版</div>
+    <h1 id="siteTitle">游戏<span class="glow">小屋</span></h1>
+    <p class="sub" id="siteSubtitle">自己写的小游戏，都放在这里</p>
+    <div class="stats" id="stats"></div>
+  </header>
+
+  <main>
+    <div class="grid" id="grid"></div>
+    <div class="empty" id="empty" hidden>
+      还没有游戏。在 <code>games.json</code> 里添加一条就会出现在这里。
+    </div>
+
+    <section class="howto">
+      <h3>离线版说明</h3>
+      <ol>
+        <li>这份是<b>离线版</b>，游戏列表已写死在本文件里，双击就能开</li>
+        <li>要加新游戏，请改 <code>games.json</code>，然后重新生成离线版</li>
+        <li>重新生成命令：<code>node tools/build-offline.js</code></li>
+        <li>联网时建议直接用<b>在线版</b>，推送后自动更新，无需重新生成</li>
+      </ol>
+    </section>
+  </main>
+
+  <footer>
+    <span id="footerText"></span>
+    <a id="footerLink" href="#" target="_blank" rel="noopener">GitHub</a>
+  </footer>
+</div>
+
+<script>
+(function () {
+  'use strict';
+
+  var grid = document.getElementById('grid');
+  var empty = document.getElementById('empty');
+  var stats = document.getElementById('stats');
+
+  function esc(s) {
+    return String(s == null ? '' : s)
+      .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+  }
+
+  function makeCard(game, index) {
+    var a = document.createElement('a');
+    a.className = 'card anim';
+    a.href = game.file || '#';
+    a.style.animationDelay = (index * 70) + 'ms';
+    a.style.setProperty('--c1', game.accent || '#5ff0ff');
+    a.style.setProperty('--c2', game.accent2 || '#a98bff');
+
+    var tags = (game.tags || []).map(function (t) {
+      return '<span class="tag">' + esc(t) + '</span>';
+    }).join('');
+
+    var ctrl = game.controls
+      ? '<div class="controls"><span class="k">' + esc(game.controls) + '</span></div>'
+      : '';
+
+    a.innerHTML =
+      (game.featured ? '<span class="badge-featured">主打</span>' : '') +
+      '<div class="card-top">' +
+        '<div class="icon">' + esc(game.icon || '▶') + '</div>' +
+        '<div>' +
+          '<h2>' + esc(game.name) + '</h2>' +
+          '<div class="tagline">' + esc(game.tagline || '') + '</div>' +
+        '</div>' +
+      '</div>' +
+      '<p class="desc">' + esc(game.description || '') + '</p>' +
+      (tags ? '<div class="tags">' + tags + '</div>' : '') +
+      ctrl +
+      '<span class="play-hint">开始玩 →</span>';
+
+    return a;
+  }
+
+  function render(data) {
+    var site = data.site || {};
+    var games = data.games || [];
+
+    if (site.title) {
+      document.getElementById('siteTitle').innerHTML =
+        esc(site.title.slice(0, -2)) + '<span class="glow">' + esc(site.title.slice(-2)) + '</span>';
+      document.title = site.title;
+    }
+    if (site.subtitle) document.getElementById('siteSubtitle').textContent = site.subtitle;
+    if (site.author) {
+      document.getElementById('footerText').textContent =
+        '© ' + new Date().getFullYear() + ' ' + site.author + ' · 共 ' + games.length + ' 个游戏';
+    }
+    if (site.github) {
+      var fl = document.getElementById('footerLink');
+      fl.href = site.github;
+    }
+
+    stats.innerHTML =
+      '<div><b>' + games.length + '</b>个游戏</div>' +
+      '<div><b>' + games.filter(function (g) { return g.featured; }).length + '</b>个主打</div>' +
+      '<div><b>' + new Set(games.reduce(function (acc, g) {
+        return acc.concat(g.tags || []);
+      }, [])).size + '</b>种标签</div>';
+
+    grid.innerHTML = '';
+    if (!games.length) { empty.hidden = false; return; }
+    empty.hidden = true;
+    games.forEach(function (g, i) { grid.appendChild(makeCard(g, i)); });
+  }
+
+  // 离线版：数据直接内嵌，不依赖 fetch（file:// 也能用）
+  var EMBEDDED_DATA = {
+  "site": {
+    "title": "游戏小屋",
+    "subtitle": "自己写的小游戏，都放在这里",
+    "author": "Z-1122",
+    "github": "https://github.com/Z-1122"
+  },
+  "games": [
+    {
+      "id": "echo",
+      "name": "回声 · ECHO",
+      "file": "games/echo.html",
+      "tagline": "你的过去，会替你挡下子弹",
+      "description": "按下空格，把过去 1.4 秒的移动轨迹复制成一个「回声」。回声能替你吸收子弹、收集光点——你的走位不再只是躲避，而是在布置未来。",
+      "tags": [
+        "弹幕",
+        "创意",
+        "生存"
+      ],
+      "accent": "#5ff0ff",
+      "accent2": "#a98bff",
+      "icon": "◉",
+      "featured": true,
+      "controls": "WASD 移动 · 空格 召唤回声 · Shift 冲刺",
+      "date": "2026-10-24"
+    },
+    {
+      "id": "2048",
+      "name": "2048",
+      "file": "games/2048.html",
+      "tagline": "合并数字，冲击 2048",
+      "description": "经典的数字合并游戏。滑动屏幕让相同数字相撞合并，一步步滚出更大的数字，看看能不能摸到 2048。",
+      "tags": [
+        "益智",
+        "休闲",
+        "经典"
+      ],
+      "accent": "#ffcd6b",
+      "accent2": "#ff8a5b",
+      "icon": "⬢",
+      "featured": false,
+      "controls": "方向键 / WASD 移动 · 手机可滑动",
+      "date": "2026-07-09"
+    }
+  ]
+};
+  try {
+    render(EMBEDDED_DATA);
+  } catch (err) {
+    empty.hidden = false;
+    empty.textContent = '渲染失败：' + err.message;
+  }
+})();
+</script>
+</body>
+</html>
