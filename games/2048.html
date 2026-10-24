@@ -1,0 +1,508 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,user-scalable=no">
+<title>2048</title>
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+    background: #faf8ef;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    min-height: 100dvh;
+    user-select: none;
+    -webkit-user-select: none;
+    touch-action: none;
+  }
+  .container {
+    width: 100%;
+    max-width: 500px;
+    padding: 16px;
+  }
+  .header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 12px;
+  }
+  .title { font-size: 40px; font-weight: 800; color: #776e65; line-height: 1; }
+  .header-right { display: flex; gap: 8px; align-items: center; }
+  .score-box, .best-box {
+    background: #bbada0;
+    border-radius: 6px;
+    padding: 6px 14px;
+    text-align: center;
+    color: #fff;
+    min-width: 68px;
+  }
+  .score-box .label, .best-box .label {
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: .5px;
+    opacity: .7;
+  }
+  .score-box .value, .best-box .value {
+    font-size: 22px;
+    font-weight: 700;
+    line-height: 1.1;
+  }
+  .sub-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 12px;
+  }
+  .sub-header p { font-size: 14px; color: #776e65; }
+  .btn-new {
+    background: #8f7a66;
+    border: none;
+    border-radius: 6px;
+    color: #f9f6f2;
+    font-size: 14px;
+    font-weight: 700;
+    padding: 8px 18px;
+    cursor: pointer;
+    transition: background .15s;
+  }
+  .btn-new:hover { background: #9f8b76; }
+  .btn-new:active { transform: scale(.96); }
+
+  .grid-container {
+    position: relative;
+    background: #bbada0;
+    border-radius: 8px;
+    width: 100%;
+    aspect-ratio: 1;
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 8px;
+    padding: 8px;
+    overflow: hidden;
+  }
+  .cell {
+    background: rgba(238, 228, 218, .35);
+    border-radius: 6px;
+  }
+  .tile-container {
+    position: absolute;
+    inset: 8px;
+  }
+  .tile {
+    position: absolute;
+    border-radius: 6px;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    font-weight: 700;
+    transition: left .12s ease, top .12s ease;
+    z-index: 1;
+  }
+  .tile-inner {
+    width: 100%;
+    height: 100%;
+    border-radius: 6px;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+  }
+  .tile-new .tile-inner { animation: pop .2s ease; }
+  .tile-merged .tile-inner { animation: pop .25s ease; z-index: 2; }
+  @keyframes pop {
+    0% { transform: scale(0); }
+    50% { transform: scale(1.1); }
+    100% { transform: scale(1); }
+  }
+
+  .tile-2 .tile-inner { background: #eee4da; color: #776e65; font-size: 38px; }
+  .tile-4 .tile-inner { background: #ede0c8; color: #776e65; font-size: 38px; }
+  .tile-8 .tile-inner { background: #f2b179; color: #f9f6f2; font-size: 38px; }
+  .tile-16 .tile-inner { background: #f59563; color: #f9f6f2; font-size: 34px; }
+  .tile-32 .tile-inner { background: #f67c5f; color: #f9f6f2; font-size: 34px; }
+  .tile-64 .tile-inner { background: #f65e3b; color: #f9f6f2; font-size: 34px; }
+  .tile-128 .tile-inner { background: #edcf72; color: #f9f6f2; font-size: 28px; box-shadow: 0 0 30px 10px rgba(243,215,116,.24); }
+  .tile-256 .tile-inner { background: #edcc61; color: #f9f6f2; font-size: 28px; box-shadow: 0 0 30px 10px rgba(243,215,116,.32); }
+  .tile-512 .tile-inner { background: #edc850; color: #f9f6f2; font-size: 28px; box-shadow: 0 0 30px 10px rgba(243,215,116,.4); }
+  .tile-1024 .tile-inner { background: #edc53f; color: #f9f6f2; font-size: 22px; box-shadow: 0 0 30px 10px rgba(243,215,116,.48); }
+  .tile-2048 .tile-inner { background: #edc22e; color: #f9f6f2; font-size: 22px; box-shadow: 0 0 30px 10px rgba(243,215,116,.56); }
+  .tile-super .tile-inner { background: #3c3a32; color: #f9f6f2; font-size: 20px; box-shadow: 0 0 30px 10px rgba(60,58,50,.4); }
+
+  .game-overlay {
+    position: absolute;
+    inset: 0;
+    background: rgba(238,228,218,.7);
+    border-radius: 8px;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    align-items: center;
+    z-index: 10;
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity .4s;
+  }
+  .game-overlay.show { opacity: 1; pointer-events: auto; }
+  .game-overlay h2 { font-size: 42px; font-weight: 800; color: #776e65; margin-bottom: 8px; }
+  .game-overlay p { font-size: 16px; color: #776e65; margin-bottom: 16px; }
+  .game-overlay .btn-new { font-size: 16px; padding: 10px 24px; }
+
+  @media (max-width:420px) {
+    .title { font-size: 32px; }
+    .score-box, .best-box { padding: 4px 10px; min-width: 56px; }
+    .score-box .value, .best-box .value { font-size: 18px; }
+    .grid-container { gap: 6px; padding: 6px; }
+    .tile-container { inset: 6px; }
+    .tile-2 .tile-inner, .tile-4 .tile-inner,
+    .tile-8 .tile-inner, .tile-16 .tile-inner,
+    .tile-32 .tile-inner, .tile-64 .tile-inner { font-size: 28px; }
+    .tile-128 .tile-inner, .tile-256 .tile-inner,
+    .tile-512 .tile-inner { font-size: 22px; }
+    .tile-1024 .tile-inner, .tile-2048 .tile-inner,
+    .tile-super .tile-inner { font-size: 18px; }
+  }
+</style>
+
+<style data-hub-nav="css">
+  #hub-nav {
+    position: fixed; top: 14px; left: 14px; z-index: 2147483000;
+    display: inline-flex; align-items: center; gap: 7px;
+    padding: 7px 14px 7px 11px; border-radius: 999px;
+    font-family: "Microsoft YaHei", "PingFang SC", system-ui, sans-serif;
+    font-size: 12.5px; font-weight: 600; line-height: 1;
+    color: #dff6ff; text-decoration: none; cursor: pointer;
+    background: rgba(8, 16, 28, 0.62);
+    border: 1px solid rgba(120, 200, 255, 0.28);
+    backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px);
+    box-shadow: 0 6px 22px -8px rgba(0, 0, 0, 0.75);
+    opacity: 0.55; transition: opacity .2s, transform .2s, border-color .2s;
+  }
+  #hub-nav:hover, #hub-nav:focus-visible {
+    opacity: 1; transform: translateY(-1px);
+    border-color: rgba(120, 200, 255, 0.65);
+    outline: none;
+  }
+  #hub-nav svg { width: 13px; height: 13px; flex: none; }
+
+  /* 浅色背景的游戏（如 2048）加 class="hub-nav-light" 覆盖配色。
+     注入时脚本会自动检测背景色并加上这个 class。 */
+  #hub-nav.hub-nav-light {
+    color: #3a332c;
+    background: rgba(255, 255, 255, 0.82);
+    border-color: rgba(120, 100, 80, 0.28);
+    box-shadow: 0 6px 20px -8px rgba(90, 75, 60, 0.45);
+  }
+  #hub-nav.hub-nav-light:hover, #hub-nav.hub-nav-light:focus-visible {
+    border-color: rgba(120, 100, 80, 0.55);
+  }
+  @media (max-width: 560px) {
+    #hub-nav { top: 10px; left: 10px; padding: 6px 11px 6px 9px; font-size: 12px; }
+  }
+  @media print { #hub-nav { display: none; } }
+</style>
+</head>
+<body>
+<a id="hub-nav" class="hub-nav-light" href="../index.html" title="返回游戏小屋" aria-label="返回游戏小屋">
+<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 18l-6-6 6-6"/></svg>
+游戏小屋
+</a>
+
+
+<div class="container">
+  <div class="header">
+    <div class="title">2048</div>
+    <div class="header-right">
+      <div class="score-box">
+        <div class="label">分数</div>
+        <div class="value" id="score">0</div>
+      </div>
+      <div class="best-box">
+        <div class="label">最高</div>
+        <div class="value" id="best">0</div>
+      </div>
+    </div>
+  </div>
+  <div class="sub-header">
+    <p>合并数字，达到 <strong>2048</strong>！</p>
+    <button class="btn-new" id="btnNew">新游戏</button>
+  </div>
+  <div class="grid-container" id="gridContainer">
+    <div class="cell"></div><div class="cell"></div><div class="cell"></div><div class="cell"></div>
+    <div class="cell"></div><div class="cell"></div><div class="cell"></div><div class="cell"></div>
+    <div class="cell"></div><div class="cell"></div><div class="cell"></div><div class="cell"></div>
+    <div class="cell"></div><div class="cell"></div><div class="cell"></div><div class="cell"></div>
+    <div class="tile-container" id="tileContainer"></div>
+    <div class="game-overlay" id="overlay">
+      <h2 id="overlayTitle">游戏结束！</h2>
+      <p id="overlayScore">最终分数: 0</p>
+      <button class="btn-new" id="btnRetry">再来一局</button>
+    </div>
+  </div>
+</div>
+
+<script>
+(function(){
+  const SIZE = 4;
+  let grid = Array(SIZE).fill().map(() => Array(SIZE).fill(0));
+  let score = 0;
+  let best = parseInt(localStorage.getItem('2048best')) || 0;
+  let won = false;
+  let over = false;
+  let animating = false;
+
+  const tileContainer = document.getElementById('tileContainer');
+  const scoreEl = document.getElementById('score');
+  const bestEl = document.getElementById('best');
+  const overlay = document.getElementById('overlay');
+  const overlayTitle = document.getElementById('overlayTitle');
+  const overlayScore = document.getElementById('overlayScore');
+
+  bestEl.textContent = best;
+
+  function posToPx(row, col) {
+    const rect = tileContainer.getBoundingClientRect();
+    const gap = rect.width < 340 ? 6 : 8;
+    const padding = rect.width < 340 ? 6 : 8;
+    const totalGap = (SIZE - 1) * gap;
+    const cellSize = (rect.width - totalGap) / SIZE;
+    return {
+      x: Math.round(col * (cellSize + gap)),
+      y: Math.round(row * (cellSize + gap)),
+      cellSize
+    };
+  }
+
+  function render() {
+    tileContainer.innerHTML = '';
+    const rect = tileContainer.getBoundingClientRect();
+    const isSmall = rect.width < 340;
+    const gap = isSmall ? 6 : 8;
+    const padding = isSmall ? 6 : 8;
+    const totalGap = (SIZE - 1) * gap;
+    const cellSize = (rect.width - totalGap) / SIZE;
+
+    for (let r = 0; r < SIZE; r++) {
+      for (let c = 0; c < SIZE; c++) {
+        const val = grid[r][c];
+        if (val === 0) continue;
+        const tile = document.createElement('div');
+        tile.className = 'tile';
+        if (val <= 2048) tile.classList.add('tile-' + val);
+        else tile.classList.add('tile-super');
+
+        const inner = document.createElement('div');
+        inner.className = 'tile-inner';
+        inner.textContent = val;
+        tile.appendChild(inner);
+
+        tile.style.width = cellSize + 'px';
+        tile.style.height = cellSize + 'px';
+        tile.style.left = Math.round(c * (cellSize + gap)) + 'px';
+        tile.style.top = Math.round(r * (cellSize + gap)) + 'px';
+
+        tileContainer.appendChild(tile);
+      }
+    }
+  }
+
+  function spawnTile() {
+    const empty = [];
+    for (let r = 0; r < SIZE; r++)
+      for (let c = 0; c < SIZE; c++)
+        if (grid[r][c] === 0) empty.push([r, c]);
+    if (empty.length === 0) return null;
+    const [r, c] = empty[Math.floor(Math.random() * empty.length)];
+    grid[r][c] = Math.random() < .9 ? 2 : 4;
+    return { r, c };
+  }
+
+  function slideLeft(row) {
+    let arr = row.filter(v => v !== 0);
+    let merged = [];
+    let mergedScore = 0;
+    let mergedIndices = new Set();
+    for (let i = 0; i < arr.length; i++) {
+      if (i + 1 < arr.length && arr[i] === arr[i + 1]) {
+        const v = arr[i] * 2;
+        merged.push(v);
+        mergedScore += v;
+        mergedIndices.add(merged.length - 1);
+        i++;
+      } else {
+        merged.push(arr[i]);
+      }
+    }
+    while (merged.length < SIZE) merged.push(0);
+    return { merged, score: mergedScore, mergedIndices };
+  }
+
+  function transpose(m) {
+    return m[0].map((_, i) => m.map(r => r[i]));
+  }
+
+  function reverse(m) {
+    return m.map(r => [...r].reverse());
+  }
+
+  function move(direction) {
+    if (animating || over || won) return false;
+    let newGrid, addedScore = 0, mergedIndices = new Set();
+    const dir = direction;
+    let work;
+
+    if (dir === 'left') {
+      work = grid.map(r => {
+        const res = slideLeft(r);
+        addedScore += res.score;
+        res.mergedIndices.forEach(i => mergedIndices.add(i));
+        return res.merged;
+      });
+      newGrid = work;
+    } else if (dir === 'right') {
+      work = grid.map(r => {
+        const rev = [...r].reverse();
+        const res = slideLeft(rev);
+        addedScore += res.score;
+        res.mergedIndices.forEach(i => mergedIndices.add(SIZE - 1 - i));
+        return res.merged.reverse();
+      });
+      newGrid = work;
+    } else if (dir === 'up') {
+      const t = transpose(grid);
+      work = t.map(r => {
+        const res = slideLeft(r);
+        addedScore += res.score;
+        return res.merged;
+      });
+      newGrid = transpose(work);
+    } else if (dir === 'down') {
+      const t = transpose(grid);
+      work = t.map(r => {
+        const rev = [...r].reverse();
+        const res = slideLeft(rev);
+        addedScore += res.score;
+        return res.merged.reverse();
+      });
+      newGrid = transpose(work);
+    }
+
+    const changed = grid.some((r, i) => r.some((v, j) => v !== newGrid[i][j]));
+    if (!changed) return false;
+
+    grid = newGrid;
+    score += addedScore;
+    if (score > best) {
+      best = score;
+      localStorage.setItem('2048best', best);
+      bestEl.textContent = best;
+    }
+   scoreEl.textContent = score;
+    const spawn = spawnTile();
+
+    render();
+
+    if (spawn) {
+      const { r, c } = spawn;
+      const isSmall = tileContainer.getBoundingClientRect().width < 340;
+      const gap = isSmall ? 6 : 8;
+      const cellSize = (tileContainer.getBoundingClientRect().width - (SIZE - 1) * gap) / SIZE;
+      const x = Math.round(c * (cellSize + gap));
+      const y = Math.round(r * (cellSize + gap));
+      const tiles = tileContainer.querySelectorAll('.tile');
+      for (const tile of tiles) {
+        if (tile.style.left === x + 'px' && tile.style.top === y + 'px') {
+          tile.classList.add('tile-new');
+          break;
+        }
+      }
+    }
+
+    if (checkWin()) {
+      won = true;
+      setTimeout(() => showOverlay('你赢了！', '恭喜达到 2048！'), 300);
+    } else if (checkLose()) {
+      over = true;
+      setTimeout(() => showOverlay('游戏结束！', '最终分数: ' + score), 300);
+    }
+    return true;
+  }
+
+  function checkWin() {
+    for (let r = 0; r < SIZE; r++)
+      for (let c = 0; c < SIZE; c++)
+        if (grid[r][c] === 2048) return true;
+    return false;
+  }
+
+  function checkLose() {
+    for (let r = 0; r < SIZE; r++)
+      for (let c = 0; c < SIZE; c++) {
+        if (grid[r][c] === 0) return false;
+        if (c + 1 < SIZE && grid[r][c] === grid[r][c+1]) return false;
+        if (r + 1 < SIZE && grid[r][c] === grid[r+1][c]) return false;
+      }
+    return true;
+  }
+
+  function showOverlay(title, msg) {
+    overlayTitle.textContent = title;
+    overlayScore.textContent = msg;
+    overlay.classList.add('show');
+  }
+
+  function init() {
+    grid = Array(SIZE).fill().map(() => Array(SIZE).fill(0));
+    score = 0;
+    won = false;
+    over = false;
+    overlay.classList.remove('show');
+    scoreEl.textContent = '0';
+    bestEl.textContent = best;
+    spawnTile();
+    spawnTile();
+    render();
+  }
+
+  // Keyboard
+  document.addEventListener('keydown', e => {
+    const map = {
+      ArrowLeft: 'left', ArrowRight: 'right',
+      ArrowUp: 'up', ArrowDown: 'down'
+    };
+    if (map[e.key]) {
+      e.preventDefault();
+      move(map[e.key]);
+    }
+  });
+
+  // Touch
+  let touchStartX = 0, touchStartY = 0;
+  document.addEventListener('touchstart', e => {
+    if (over || won) return;
+    const t = e.touches[0];
+    touchStartX = t.clientX;
+    touchStartY = t.clientY;
+  }, { passive: true });
+  document.addEventListener('touchmove', e => e.preventDefault(), { passive: false });
+  document.addEventListener('touchend', e => {
+    if (over || won) return;
+    const dx = e.changedTouches[0].clientX - touchStartX;
+    const dy = e.changedTouches[0].clientY - touchStartY;
+    const absDx = Math.abs(dx), absDy = Math.abs(dy);
+    if (Math.max(absDx, absDy) < 20) return;
+    if (absDx > absDy) {
+      move(dx > 0 ? 'right' : 'left');
+    } else {
+      move(dy > 0 ? 'down' : 'up');
+    }
+  }, { passive: true });
+
+  document.getElementById('btnNew').addEventListener('click', init);
+  document.getElementById('btnRetry').addEventListener('click', init);
+
+  init();
+})();
+</script>
+</body>
+</html>
