@@ -2,7 +2,11 @@
 <html lang="zh-CN">
 <head>
 <meta charset="utf-8" />
-<meta name="viewport" content="width=device-width, initial-scale=1" />
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover" />
+<meta name="theme-color" content="#05070e" />
+<meta name="mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
 <title>回声 · ECHO</title>
 <style>
   :root { color-scheme: dark; }
@@ -12,12 +16,69 @@
     display: flex; align-items: center; justify-content: center;
     background: radial-gradient(circle at 50% 35%, #0b1728 0%, #03050a 65%);
     overflow: hidden;
+    /* 移动端：禁止长按选中、双击缩放、下拉刷新 */
+    -webkit-user-select: none; user-select: none;
+    -webkit-touch-callout: none;
+    -webkit-tap-highlight-color: transparent;
+    touch-action: none;
+    overscroll-behavior: none;
+    padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);
   }
-  #wrap { width: min(96vw, 153.6vh); aspect-ratio: 8 / 5; }
+  #wrap {
+    width: min(96vw, 153.6vh);
+    aspect-ratio: 8 / 5;
+  }
   canvas {
     display: block; width: 100%; height: 100%;
     border-radius: 14px;
     box-shadow: 0 0 0 1px rgba(120, 200, 255, 0.10), 0 24px 90px -20px rgba(0, 180, 255, 0.35);
+    touch-action: none;
+  }
+
+  /* 竖屏手机：游戏是宽屏的，横过来体验最好 —— 显示旋转提示。
+     用 aspect-ratio 判断竖屏，只要窗口比高度窄且不高于 900px 就提示。
+     不依赖 pointer:coarse，避免部分浏览器/WebView 不匹配。 */
+  #rotate-tip { display: none; }
+  @media (orientation: portrait) and (max-width: 900px) {
+    #wrap { opacity: 0.25; filter: blur(3px); }
+    #rotate-tip {
+      display: flex;
+      position: fixed; inset: 0; z-index: 2147483600;
+      align-items: center; justify-content: center;
+      flex-direction: column; gap: 22px;
+      background: rgba(3, 6, 12, 0.88);
+      backdrop-filter: blur(6px); -webkit-backdrop-filter: blur(6px);
+      font-family: "Microsoft YaHei", "PingFang SC", system-ui, sans-serif;
+      color: #e8f4ff; text-align: center; padding: 24px;
+    }
+    #rotate-tip .phone {
+      width: 74px; height: 128px; border-radius: 14px;
+      border: 3px solid rgba(120, 220, 255, 0.85);
+      box-shadow: 0 0 34px -6px rgba(95, 240, 255, 0.7);
+      animation: rot 2.4s ease-in-out infinite;
+      position: relative;
+    }
+    #rotate-tip .phone::after {
+      content: ""; position: absolute; left: 50%; bottom: 7px;
+      width: 26px; height: 3px; border-radius: 2px;
+      background: rgba(120, 220, 255, 0.6); transform: translateX(-50%);
+    }
+    #rotate-tip b { font-size: 19px; font-weight: 700; letter-spacing: .02em; }
+    #rotate-tip span { font-size: 13.5px; color: rgba(150, 195, 225, 0.8); line-height: 1.7; }
+    #rotate-tip .skip {
+      margin-top: 6px; font-size: 13px; padding: 9px 20px; cursor: pointer;
+      color: #9fe8ff; background: rgba(95, 240, 255, 0.08);
+      border: 1px solid rgba(95, 240, 255, 0.3); border-radius: 999px;
+      font-family: inherit;
+    }
+    #rotate-tip .skip:active { background: rgba(95, 240, 255, 0.18); }
+  }
+  @keyframes rot {
+    0%, 35% { transform: rotate(0deg); }
+    60%, 100% { transform: rotate(-90deg); }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    #rotate-tip .phone { animation: none; transform: rotate(-90deg); }
   }
 </style>
 
@@ -66,6 +127,13 @@
 </a>
 
 <div id="wrap"><canvas id="game" width="960" height="600"></canvas></div>
+
+<div id="rotate-tip">
+  <div class="phone"></div>
+  <b>请把手机横过来</b>
+  <span>《回声》是宽屏游戏，横屏才能看清战场<br>把手机转为横向即可自动开始</span>
+  <button class="skip" id="rotate-skip">竖屏也能玩，继续</button>
+</div>
 <script>
 (function () {
   'use strict';
@@ -290,6 +358,29 @@
     x: W / 2, y: H / 2, vx: 0, vy: 0, r: 9,
     invuln: 0, dashT: 0, dashCD: 0, dvx: 0, dvy: 0
   };
+
+  /* ---------------- 触屏输入状态 ----------------
+     左下角虚拟摇杆输出一个方向向量，与键盘输入相加后一起参与移动。 */
+  const touch = {
+    active: false,     // 是否正在拖动摇杆
+    pointerId: null,
+    ox: 0, oy: 0,      // 摇杆基座（逻辑坐标）
+    cx: 0, cy: 0,      // 摇杆头当前位置
+    dx: 0, dy: 0,      // 归一化方向
+    mag: 0             // 推杆幅度 0~1
+  };
+  const JOY_RADIUS = 68;   // 摇杆最大拖拽半径
+  const JOY_DEAD = 0.2;    // 死区，避免手指轻触就走动
+
+  // 触屏按钮的命中区域（逻辑坐标），在 drawTouchUI 里同步绘制
+  const BTN = {
+    summon: { x: W - 96, y: H - 96, r: 52, label: '回声' },
+    dash: { x: W - 196, y: H - 62, r: 38, label: '冲刺' }
+  };
+  const btnPulse = { summon: 0, dash: 0 };  // 按下反馈动画
+
+  let isTouch = false;      // 是否检测到触屏设备
+  let touchHintT = 0;       // 触屏操作提示的显示计时
 
   const echoes = [];
   const bullets = [];
@@ -621,6 +712,13 @@
     if (keys.has('ArrowRight') || keys.has('KeyD')) ix += 1;
     if (keys.has('ArrowUp') || keys.has('KeyW')) iy -= 1;
     if (keys.has('ArrowDown') || keys.has('KeyS')) iy += 1;
+
+    // 触屏摇杆：方向叠加到键盘输入上
+    if (touch.active && touch.mag > JOY_DEAD) {
+      ix += touch.dx;
+      iy += touch.dy;
+    }
+
     const len = Math.hypot(ix, iy);
     if (len > 0) { ix /= len; iy /= len; }
 
@@ -686,6 +784,9 @@
     }
     if (shake > 0) shake = Math.max(0, shake - dt * 42);
     if (chargeFlash > 0) chargeFlash = Math.max(0, chargeFlash - dt);
+    if (btnPulse.summon > 0) btnPulse.summon = Math.max(0, btnPulse.summon - dt * 4);
+    if (btnPulse.dash > 0) btnPulse.dash = Math.max(0, btnPulse.dash - dt * 4);
+    if (touchHintT > 0) touchHintT = Math.max(0, touchHintT - dt);
     if (announce) {
       announce.life -= dt;
       if (announce.life <= 0) announce = null;
@@ -1034,12 +1135,130 @@
     }
 
     const ha = hintAlpha();
-    if (ha > 0) {
+    if (ha > 0 && !isTouch) {
       ctx.textAlign = 'right';
       ctx.fillStyle = 'rgba(150,200,230,' + (0.45 * ha) + ')';
       ctx.font = '600 12px ' + FONT;
       ctx.fillText('空格 召唤回声   ·   Shift 冲刺   ·   P 暂停   ·   M 静音', W - 28, H - 30);
     }
+
+    // 触屏操作提示：开局 5 秒内淡淡显示
+    if (isTouch && touchHintT > 0) {
+      const ta = clamp(touchHintT / 1.2, 0, 1) * 0.5;
+      ctx.textAlign = 'center';
+      ctx.fillStyle = 'rgba(150,215,245,' + ta + ')';
+      ctx.font = '600 13px ' + FONT;
+      ctx.fillText('左侧拖动移动 · 右下按钮召唤回声与冲刺', W / 2, H - 24);
+    }
+  }
+
+  /* ---------------- 触屏操作界面 ---------------- */
+  function drawTouchUI() {
+    if (!isTouch) return;
+
+    const hasEnergy = charge >= SUMMON_COST;
+
+    // ---- 虚拟摇杆 ----
+    // 未触摸时画在左下角固定位置作为"归位点"，触摸时跟到手指处
+    const baseX = touch.active ? touch.ox : 118;
+    const baseY = touch.active ? touch.oy : H - 118;
+    const alpha = touch.active ? 0.5 : 0.22;
+
+    ctx.save();
+    // 基座
+    ctx.beginPath();
+    ctx.arc(baseX, baseY, JOY_RADIUS, 0, TAU);
+    ctx.strokeStyle = 'rgba(120,200,255,' + alpha * 0.85 + ')';
+    ctx.lineWidth = 2;
+    ctx.stroke();
+    ctx.fillStyle = 'rgba(120,200,255,' + alpha * 0.12 + ')';
+    ctx.fill();
+
+    // 内圈刻度
+    ctx.beginPath();
+    ctx.arc(baseX, baseY, JOY_RADIUS * 0.45, 0, TAU);
+    ctx.strokeStyle = 'rgba(120,200,255,' + alpha * 0.4 + ')';
+    ctx.lineWidth = 1;
+    ctx.stroke();
+
+    // 摇杆头
+    const hx = touch.active ? touch.cx : baseX;
+    const hy = touch.active ? touch.cy : baseY;
+    const headR = touch.active ? 26 : 20;
+    glow(SPR.cyan, hx, hy, headR * 2.1, touch.active ? 0.5 : 0.16);
+    ctx.beginPath();
+    ctx.arc(hx, hy, headR, 0, TAU);
+    ctx.fillStyle = 'rgba(150,225,255,' + (touch.active ? 0.5 : 0.2) + ')';
+    ctx.fill();
+    ctx.strokeStyle = 'rgba(190,240,255,' + (touch.active ? 0.9 : 0.35) + ')';
+    ctx.lineWidth = 2;
+    ctx.stroke();
+    ctx.restore();
+
+    // ---- 按钮 ----
+    const btnSummon = BTN.summon;
+    const sp = btnPulse.summon;   // 0~1 按下动画
+    const sumR = btnSummon.r * (1 + sp * 0.12);
+    const sumAlpha = hasEnergy ? 0.42 + sp * 0.4 : 0.16;
+
+    glow(SPR.cyan, btnSummon.x, btnSummon.y, sumR * 1.85, hasEnergy ? 0.35 + sp * 0.35 : 0.08);
+    ctx.beginPath();
+    ctx.arc(btnSummon.x, btnSummon.y, sumR, 0, TAU);
+    ctx.fillStyle = hasEnergy
+      ? 'rgba(95,240,255,' + sumAlpha * 0.32 + ')'
+      : 'rgba(120,140,160,0.10)';
+    ctx.fill();
+    ctx.strokeStyle = hasEnergy
+      ? 'rgba(140,240,255,' + (0.55 + sp * 0.45) + ')'
+      : 'rgba(140,170,190,0.22)';
+    ctx.lineWidth = 2.5;
+    ctx.stroke();
+
+    // 能量进度环
+    ctx.beginPath();
+    ctx.arc(btnSummon.x, btnSummon.y, sumR - 6, -Math.PI / 2,
+      -Math.PI / 2 + TAU * clamp(charge / 100, 0, 1));
+    ctx.strokeStyle = hasEnergy ? 'rgba(200,250,255,0.85)' : 'rgba(150,200,230,0.35)';
+    ctx.lineWidth = 3;
+    ctx.stroke();
+
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillStyle = hasEnergy ? '#eafcff' : 'rgba(200,225,240,0.4)';
+    ctx.font = '700 17px ' + FONT;
+    ctx.fillText('回声', btnSummon.x, btnSummon.y);
+
+    // 冲刺按钮
+    const btnDash = BTN.dash;
+    const dp = btnPulse.dash;
+    const dashReady = player.dashCD <= 0;
+    const dashR = btnDash.r * (1 + dp * 0.12);
+
+    glow(SPR.violet, btnDash.x, btnDash.y, dashR * 1.8, dashReady ? 0.28 : 0.06);
+    ctx.beginPath();
+    ctx.arc(btnDash.x, btnDash.y, dashR, 0, TAU);
+    ctx.fillStyle = dashReady ? 'rgba(175,140,255,0.20)' : 'rgba(120,140,160,0.09)';
+    ctx.fill();
+    ctx.strokeStyle = dashReady
+      ? 'rgba(190,165,255,' + (0.5 + dp * 0.5) + ')'
+      : 'rgba(140,170,190,0.2)';
+    ctx.lineWidth = 2;
+    ctx.stroke();
+
+    // 冷却环
+    if (!dashReady) {
+      ctx.beginPath();
+      ctx.arc(btnDash.x, btnDash.y, dashR - 5, -Math.PI / 2,
+        -Math.PI / 2 + TAU * clamp(1 - player.dashCD / 1.05, 0, 1));
+      ctx.strokeStyle = 'rgba(190,165,255,0.65)';
+      ctx.lineWidth = 2.5;
+      ctx.stroke();
+    }
+
+    ctx.fillStyle = dashReady ? '#eee6ff' : 'rgba(200,225,240,0.4)';
+    ctx.font = '700 13px ' + FONT;
+    ctx.fillText('冲刺', btnDash.x, btnDash.y);
+    ctx.textBaseline = 'alphabetic';
   }
 
   function drawAnnounce() {
@@ -1095,12 +1314,19 @@
     ctx.fillStyle = 'rgba(190,220,240,0.72)';
     ctx.fillText('召唤过去的自己，替你挡下子弹、收集光点', W / 2, 300);
 
-    const rows = [
-      ['WASD / 方向键', '移动'],
-      ['空格', '召唤回声 · 消耗 28 能量'],
-      ['Shift', '短暂冲刺 · 无敌'],
-      ['P  /  M', '暂停 / 静音']
-    ];
+    const rows = isTouch
+      ? [
+          ['左摇杆', '拖动移动'],
+          ['回声 按钮', '召唤回声 · 消耗 28 能量'],
+          ['冲刺 按钮', '短暂冲刺 · 无敌'],
+          ['右上角', '暂停 / 静音']
+        ]
+      : [
+          ['WASD / 方向键', '移动'],
+          ['空格', '召唤回声 · 消耗 28 能量'],
+          ['Shift', '短暂冲刺 · 无敌'],
+          ['P  /  M', '暂停 / 静音']
+        ];
     ctx.font = '500 14px ' + FONT;
     for (let i = 0; i < rows.length; i++) {
       const y = 366 + i * 30;
@@ -1123,7 +1349,7 @@
     ctx.textAlign = 'center';
     ctx.font = '600 16px ' + FONT;
     ctx.fillStyle = 'rgba(190,245,255,' + a + ')';
-    ctx.fillText('按 空格 开始', W / 2, 560);
+    ctx.fillText(isTouch ? '轻触屏幕开始' : '按 空格 开始', W / 2, 560);
   }
 
   function drawOver() {
@@ -1182,6 +1408,7 @@
 
     if (state === 'playing') {
       drawHUD();
+      drawTouchUI();
       if (announce) drawAnnounce();
       if (paused) drawPaused();
     } else if (state === 'title') {
@@ -1227,13 +1454,184 @@
 
   window.addEventListener('blur', function () {
     keys.clear();
+    touch.active = false;
+    touch.mag = 0;
     if (state === 'playing') paused = true;
   });
 
-  canvas.addEventListener('pointerdown', function () {
+  /* ---------------- 指针 / 触屏输入 ----------------
+     一套逻辑同时支持手指和鼠标：
+       - 左半屏拖动 = 移动（虚拟摇杆）
+       - 点右下「回声」「冲刺」按钮 = 对应操作
+       - 标题/结束画面点任意处 = 开始游戏
+  ------------------------------------------------ */
+  const canvasRect = { left: 0, top: 0, width: W, height: H, scale: 1 };
+
+  function refreshRect() {
+    const r = canvas.getBoundingClientRect();
+    canvasRect.left = r.left;
+    canvasRect.top = r.top;
+    canvasRect.width = r.width;
+    canvasRect.height = r.height;
+    canvasRect.scale = r.width > 0 ? W / r.width : 1;
+  }
+
+  // 屏幕坐标 -> 逻辑坐标（960x600 画布空间）
+  function toLogical(clientX, clientY) {
+    return {
+      x: (clientX - canvasRect.left) * canvasRect.scale,
+      y: (clientY - canvasRect.top) * canvasRect.scale
+    };
+  }
+
+  function hitBtn(p, btn) {
+    const dx = p.x - btn.x;
+    const dy = p.y - btn.y;
+    // 触摸目标放宽一点，手指没那么精准
+    const r = btn.r * (isTouch ? 1.25 : 1.0);
+    return dx * dx + dy * dy <= r * r;
+  }
+
+  function onPointerDown(e) {
     initAudio();
-    if (state === 'title' || state === 'over') startGame();
-  });
+    refreshRect();
+    const p = toLogical(e.clientX, e.clientY);
+
+    if (state === 'title' || state === 'over') {
+      startGame();
+      touchHintT = 5;
+      return;
+    }
+    if (state !== 'playing' || paused) return;
+
+    // 先判断按钮
+    if (hitBtn(p, BTN.summon)) {
+      btnPulse.summon = 1;
+      summonEcho();
+      return;
+    }
+    if (hitBtn(p, BTN.dash)) {
+      btnPulse.dash = 1;
+      dash();
+      return;
+    }
+
+    // 其余区域作为摇杆：落在哪就从哪起摇
+    touch.active = true;
+    touch.pointerId = e.pointerId;
+    touch.ox = p.x;
+    touch.oy = p.y;
+    touch.cx = p.x;
+    touch.cy = p.y;
+    touch.dx = 0;
+    touch.dy = 0;
+    touch.mag = 0;
+
+    if (canvas.setPointerCapture && e.pointerId !== undefined) {
+      try { canvas.setPointerCapture(e.pointerId); } catch (err) { /* 忽略 */ }
+    }
+    e.preventDefault();
+  }
+
+  function onPointerMove(e) {
+    if (!touch.active || e.pointerId !== touch.pointerId) return;
+    refreshRect();
+    const p = toLogical(e.clientX, e.clientY);
+
+    let dx = p.x - touch.ox;
+    let dy = p.y - touch.oy;
+    let dist = Math.hypot(dx, dy);
+
+    if (dist > JOY_RADIUS) {
+      // 手指超出半径：摇杆基座跟随手指，保持"推到底"的手感
+      const k = (dist - JOY_RADIUS) / dist;
+      touch.ox += dx * k;
+      touch.oy += dy * k;
+      dx = p.x - touch.ox;
+      dy = p.y - touch.oy;
+      dist = Math.hypot(dx, dy) || 1;
+    }
+
+    // 方向始终按实际偏移算，幅度限制在 0~1
+    touch.dx = dx / dist;
+    touch.dy = dy / dist;
+    touch.mag = clamp(dist / JOY_RADIUS, 0, 1);
+
+    // 摇杆头画在半径内
+    const headDist = Math.min(dist, JOY_RADIUS);
+    touch.cx = touch.ox + (dx / dist) * headDist;
+    touch.cy = touch.oy + (dy / dist) * headDist;
+
+    e.preventDefault();
+  }
+
+  function onPointerUp(e) {
+    if (e.pointerId !== touch.pointerId) return;
+    touch.active = false;
+    touch.pointerId = null;
+    touch.mag = 0;
+    touch.dx = 0;
+    touch.dy = 0;
+  }
+
+  if (window.PointerEvent) {
+    canvas.addEventListener('pointerdown', onPointerDown);
+    canvas.addEventListener('pointermove', onPointerMove);
+    canvas.addEventListener('pointerup', onPointerUp);
+    canvas.addEventListener('pointercancel', onPointerUp);
+  } else {
+    // 老浏览器回退
+    canvas.addEventListener('mousedown', onPointerDown);
+    window.addEventListener('mousemove', onPointerMove);
+    window.addEventListener('mouseup', onPointerUp);
+    canvas.addEventListener('touchstart', function (e) {
+      if (e.touches.length) {
+        const t = e.touches[0];
+        onPointerDown({ clientX: t.clientX, clientY: t.clientY, pointerId: t.identifier, preventDefault: function () {} });
+      }
+      e.preventDefault();
+    }, { passive: false });
+    canvas.addEventListener('touchmove', function (e) {
+      if (e.touches.length) {
+        const t = e.touches[0];
+        onPointerMove({ clientX: t.clientX, clientY: t.clientY, pointerId: t.identifier, preventDefault: function () {} });
+      }
+      e.preventDefault();
+    }, { passive: false });
+    canvas.addEventListener('touchend', function (e) {
+      onPointerUp({ pointerId: touch.pointerId });
+    });
+  }
+
+  // 阻止移动端长按选中/放大/双击缩放
+  canvas.addEventListener('contextmenu', function (e) { e.preventDefault(); });
+  canvas.addEventListener('touchstart', function (e) { e.preventDefault(); }, { passive: false });
+  canvas.addEventListener('touchmove', function (e) { e.preventDefault(); }, { passive: false });
+  canvas.style.touchAction = 'none';
+
+  // 触屏设备检测
+  (function detectTouch() {
+    const hasTouch = ('ontouchstart' in window) ||
+      (navigator && navigator.maxTouchPoints > 0) ||
+      (navigator && /Android|iPhone|iPad|iPod|Mobile/i.test(navigator.userAgent || ''));
+    isTouch = !!hasTouch;
+  })();
+
+  // 竖屏提示：用户点「继续」后本次不再提示
+  (function rotateTip() {
+    const tip = document.getElementById('rotate-tip');
+    const skip = document.getElementById('rotate-skip');
+    if (!tip || !skip) return;
+    let dismissed = false;
+    try { dismissed = sessionStorage.getItem('echo_rotate_skip') === '1'; } catch (err) { /* 忽略 */ }
+    if (dismissed) tip.style.display = 'none';
+
+    skip.addEventListener('click', function (e) {
+      e.stopPropagation();
+      tip.style.display = 'none';
+      try { sessionStorage.setItem('echo_rotate_skip', '1'); } catch (err) { /* 忽略 */ }
+    });
+  })();
 
   document.addEventListener('visibilitychange', function () {
     if (document.hidden && state === 'playing') paused = true;
@@ -1250,6 +1648,17 @@
     requestAnimationFrame(frame);
   }
   requestAnimationFrame(frame);
+
+  /* 供自动化测试读取内部状态（不影响游戏本身） */
+  window.__echoDebug = {
+    get state() { return state; },
+    get player() { return { x: player.x, y: player.y, vx: player.vx, vy: player.vy, dashCD: player.dashCD }; },
+    get touch() { return { active: touch.active, dx: touch.dx, dy: touch.dy, mag: touch.mag }; },
+    get charge() { return charge; },
+    get echoes() { return echoes.length; },
+    get isTouch() { return isTouch; },
+    get score() { return score; }
+  };
 })();
 </script>
 </body>

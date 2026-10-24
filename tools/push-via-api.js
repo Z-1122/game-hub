@@ -20,11 +20,16 @@ const FILES = [
   'index.html',
   'games.json',
   'README.md',
+  '离线版.html',
   'games/echo.html',
   'games/2048.html',
   'tools/inject-nav.js',
+  'tools/build-offline.js',
+  'tools/push-via-api.js',
   'tools/test-hub.js',
-  'tools/test-games.js'
+  'tools/test-games.js',
+  'tools/test-touch.js',
+  'tools/test-mobile.js'
 ];
 
 function api(method, endpoint, body) {

@@ -110,6 +110,10 @@ function run(file, label) {
   sandbox.localStorage = sandbox.window.localStorage;
   sandbox.alert = () => {};
   sandbox.confirm = () => true;
+  // 触屏检测会读 navigator，这里模拟一台桌面设备（非触屏）
+  sandbox.navigator = { maxTouchPoints: 0, userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)' };
+  sandbox.sessionStorage = { getItem: () => null, setItem: () => {} };
+  sandbox.PointerEvent = function () {};
 
   const html = fs.readFileSync(file, 'utf8');
   const scripts = [...html.matchAll(/<script>([\s\S]*?)<\/script>/g)].map((m) => m[1]);
