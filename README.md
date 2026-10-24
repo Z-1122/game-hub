@@ -97,11 +97,20 @@ node tools/inject-nav.js
 
 > 注意：`index.html` 指向 `../index.html`，所以游戏必须放在 `games/` 的**下一级**。如果你的游戏放在子文件夹里（如 `games/your-game/index.html`），需要手动把链接改成 `../../index.html`。
 
-## 本地预览
+## 本地打开（两种方式）
 
-因为首页要用 `fetch` 读取 `games.json`，**直接双击 `index.html` 会被浏览器的安全策略拦截**（`file://` 协议不允许读取本地文件）。
+### 方式一：双击 `离线版.html`（最省事）
 
-要用本地服务器：
+**直接双击 `离线版.html` 就能用**，不需要服务器、不需要联网。
+
+它的原理是把 `games.json` 的数据**直接内嵌进 HTML**，绕开 `file://` 协议禁止 `fetch` 的限制。
+
+> 缺点：游戏列表是写死的。加了新游戏后需要重新生成一次：
+> ```bash
+> node tools/build-offline.js
+> ```
+
+### 方式二：起本地服务器（改了就生效，不用重新生成）
 
 ```bash
 cd game-hub
@@ -115,20 +124,33 @@ python -m http.server 8000
 npx serve .
 ```
 
-游戏本身（`games/` 里的文件）是独立单文件，双击直接能玩，不受这个限制。
+这种方式读的是实时的 `games.json`，改完刷新就生效。
+
+### ⚠️ 为什么不能直接双击 `index.html`
+
+`index.html` 要用 `fetch('games.json')` 来生成卡片，而浏览器安全策略**禁止 `file://` 页面读取其他本地文件**，请求会被拦掉，页面只剩标题、卡片出不来。
+
+- 想双击 → 用 `离线版.html`
+- 想双击 `index.html` → 必须起服务器
+
+游戏本身（`games/` 里的文件）是独立单文件，**双击直接能玩**，不受这个限制。
 
 ## 目录结构
 
 ```
 game-hub/
-├── index.html            # 门户首页（卡片从 games.json 动态生成）
+├── index.html            # 门户首页（卡片从 games.json 动态生成，需服务器）
+├── 离线版.html            # 双击即用的单文件版（数据已内嵌）
 ├── games.json            # 游戏清单 —— 加游戏改这里
 ├── games/
 │   ├── echo.html         # 回声 · ECHO
 │   └── 2048.html         # 2048
 ├── tools/
 │   ├── inject-nav.js     # 给游戏注入「返回门户」浮标
-│   └── test-hub.js       # 门户端到端测试
+│   ├── build-offline.js  # 生成离线版.html
+│   ├── push-via-api.js   # 用 GitHub API 上传（git 协议不通时的备用方案）
+│   ├── test-hub.js       # 门户端到端测试
+│   └── test-games.js     # 游戏加载测试
 └── README.md
 ```
 
