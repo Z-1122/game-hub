@@ -28,6 +28,11 @@
     width: min(96vw, 153.6vh);
     aspect-ratio: 8 / 5;
   }
+  /* 移动浏览器地址栏伸缩时 vh 不等于可视高度，优先用 dvh */
+  @supports (height: 100dvh) {
+    #wrap { width: min(96vw, 153.6dvh); }
+    body.landscape-mode #wrap { width: min(100vw, 160dvh); }
+  }
   canvas {
     display: block; width: 100%; height: 100%;
     border-radius: 14px;
@@ -35,50 +40,56 @@
     touch-action: none;
   }
 
-  /* 竖屏手机：游戏是宽屏的，横过来体验最好 —— 显示旋转提示。
-     用 aspect-ratio 判断竖屏，只要窗口比高度窄且不高于 900px 就提示。
-     不依赖 pointer:coarse，避免部分浏览器/WebView 不匹配。 */
-  #rotate-tip { display: none; }
-  @media (orientation: portrait) and (max-width: 900px) {
-    #wrap { opacity: 0.25; filter: blur(3px); }
-    #rotate-tip {
-      display: flex;
-      position: fixed; inset: 0; z-index: 2147483600;
-      align-items: center; justify-content: center;
-      flex-direction: column; gap: 22px;
-      background: rgba(3, 6, 12, 0.88);
-      backdrop-filter: blur(6px); -webkit-backdrop-filter: blur(6px);
-      font-family: "Microsoft YaHei", "PingFang SC", system-ui, sans-serif;
-      color: #e8f4ff; text-align: center; padding: 24px;
-    }
-    #rotate-tip .phone {
-      width: 74px; height: 128px; border-radius: 14px;
-      border: 3px solid rgba(120, 220, 255, 0.85);
-      box-shadow: 0 0 34px -6px rgba(95, 240, 255, 0.7);
-      animation: rot 2.4s ease-in-out infinite;
-      position: relative;
-    }
-    #rotate-tip .phone::after {
-      content: ""; position: absolute; left: 50%; bottom: 7px;
-      width: 26px; height: 3px; border-radius: 2px;
-      background: rgba(120, 220, 255, 0.6); transform: translateX(-50%);
-    }
-    #rotate-tip b { font-size: 19px; font-weight: 700; letter-spacing: .02em; }
-    #rotate-tip span { font-size: 13.5px; color: rgba(150, 195, 225, 0.8); line-height: 1.7; }
-    #rotate-tip .skip {
-      margin-top: 6px; font-size: 13px; padding: 9px 20px; cursor: pointer;
-      color: #9fe8ff; background: rgba(95, 240, 255, 0.08);
-      border: 1px solid rgba(95, 240, 255, 0.3); border-radius: 999px;
-      font-family: inherit;
-    }
-    #rotate-tip .skip:active { background: rgba(95, 240, 255, 0.18); }
+  /* 竖屏提示：完全由 JS 控制显隐（body.tip-on）。
+     不再用 CSS orientation 媒体查询——部分手机浏览器/WebView 旋转时
+     不更新该查询，会出现"横屏了提示还在"。也不再模糊画面。 */
+  #rotate-tip {
+    display: none;
+    position: fixed; inset: 0; z-index: 2147483600;
+    align-items: center; justify-content: center;
+    flex-direction: column; gap: 22px;
+    background: rgba(3, 6, 12, 0.86);
+    font-family: "Microsoft YaHei", "PingFang SC", system-ui, sans-serif;
+    color: #e8f4ff; text-align: center; padding: 24px;
   }
+  body.tip-on #rotate-tip { display: flex; }
+  #rotate-tip .phone {
+    width: 74px; height: 128px; border-radius: 14px;
+    border: 3px solid rgba(120, 220, 255, 0.85);
+    box-shadow: 0 0 34px -6px rgba(95, 240, 255, 0.7);
+    animation: rot 2.4s ease-in-out infinite;
+    position: relative;
+  }
+  #rotate-tip .phone::after {
+    content: ""; position: absolute; left: 50%; bottom: 7px;
+    width: 26px; height: 3px; border-radius: 2px;
+    background: rgba(120, 220, 255, 0.6); transform: translateX(-50%);
+  }
+  #rotate-tip b { font-size: 19px; font-weight: 700; letter-spacing: .02em; }
+  #rotate-tip span { font-size: 13.5px; color: rgba(150, 195, 225, 0.8); line-height: 1.7; }
+  #rotate-tip .skip {
+    margin-top: 6px; font-size: 13px; padding: 9px 20px; cursor: pointer;
+    color: #9fe8ff; background: rgba(95, 240, 255, 0.08);
+    border: 1px solid rgba(95, 240, 255, 0.3); border-radius: 999px;
+    font-family: inherit;
+  }
+  #rotate-tip .skip:active { background: rgba(95, 240, 255, 0.18); }
   @keyframes rot {
     0%, 35% { transform: rotate(0deg); }
     60%, 100% { transform: rotate(-90deg); }
   }
   @media (prefers-reduced-motion: reduce) {
     #rotate-tip .phone { animation: none; transform: rotate(-90deg); }
+  }
+
+  /* 横屏手机：铺满整个视口，去掉圆角和阴影，画面更大更清楚 */
+  body.landscape-mode #wrap {
+    width: min(100vw, 160vh);
+    aspect-ratio: 8 / 5;
+  }
+  body.landscape-mode canvas {
+    border-radius: 0;
+    box-shadow: none;
   }
 </style>
 
@@ -161,9 +172,15 @@
   let dpr = 1;
 
   function fit() {
-    dpr = Math.min(2, window.devicePixelRatio || 1);
-    canvas.width = Math.round(W * dpr);
-    canvas.height = Math.round(H * dpr);
+    // 用真实 dpr 渲染，上限 3，避免高分屏被降采样导致发虚
+    const raw = window.devicePixelRatio || 1;
+    dpr = Math.min(3, Math.max(1, raw));
+    const bw = Math.round(W * dpr);
+    const bh = Math.round(H * dpr);
+    if (canvas.width !== bw || canvas.height !== bh) {
+      canvas.width = bw;
+      canvas.height = bh;
+    }
   }
   fit();
   window.addEventListener('resize', fit);
@@ -1617,20 +1634,58 @@
     isTouch = !!hasTouch;
   })();
 
-  // 竖屏提示：用户点「继续」后本次不再提示
-  (function rotateTip() {
-    const tip = document.getElementById('rotate-tip');
-    const skip = document.getElementById('rotate-skip');
-    if (!tip || !skip) return;
-    let dismissed = false;
-    try { dismissed = sessionStorage.getItem('echo_rotate_skip') === '1'; } catch (err) { /* 忽略 */ }
-    if (dismissed) tip.style.display = 'none';
+  // 竖屏提示：用 JS 判断宽高，横屏必定消失（不依赖 CSS orientation 媒体查询）
+  let tipDismissed = false;
+  try { tipDismissed = sessionStorage.getItem('echo_rotate_skip') === '1'; } catch (err) { /* 忽略 */ }
 
-    skip.addEventListener('click', function (e) {
-      e.stopPropagation();
-      tip.style.display = 'none';
-      try { sessionStorage.setItem('echo_rotate_skip', '1'); } catch (err) { /* 忽略 */ }
+  function viewportSize() {
+    const vv = window.visualViewport;
+    const de = document.documentElement || {};
+    const w = Math.round((vv && vv.width) || window.innerWidth || de.clientWidth || 0);
+    const h = Math.round((vv && vv.height) || window.innerHeight || de.clientHeight || 0);
+    return { w: w, h: h };
+  }
+
+  function isLandscapeNow() {
+    const s = viewportSize();
+    // 宽明显大于高才算横屏，避免地址栏伸缩造成误判
+    return s.w > s.h * 1.04;
+  }
+
+  function tickOrientation() {
+    const land = isLandscapeNow();
+    document.body.classList.toggle('landscape-mode', land);
+    const showTip = isTouch && !land && !tipDismissed;
+    document.body.classList.toggle('tip-on', showTip);
+    fit();
+  }
+
+  (function rotateTip() {
+    const skip = document.getElementById('rotate-skip');
+    if (skip) {
+      skip.addEventListener('click', function (e) {
+        e.stopPropagation();
+        tipDismissed = true;
+        document.body.classList.remove('tip-on');
+        try { sessionStorage.setItem('echo_rotate_skip', '1'); } catch (err) { /* 忽略 */ }
+        fit();
+      });
+    }
+
+    // 首次判定 + 旋转后多延迟几次重算（手机旋转时视口尺寸会晚一点稳定）
+    tickOrientation();
+    [60, 180, 360, 600].forEach(function (ms) { setTimeout(tickOrientation, ms); });
+
+    window.addEventListener('resize', tickOrientation);
+    window.addEventListener('orientationchange', function () {
+      tickOrientation();
+      [100, 250, 500, 800].forEach(function (ms) { setTimeout(tickOrientation, ms); });
     });
+    if (window.visualViewport) {
+      window.visualViewport.addEventListener('resize', tickOrientation);
+    }
+    // 兜底轮询：个别 WebView 旋转时事件不触发，每 700ms 校验一次（开销极小）
+    setInterval(tickOrientation, 700);
   })();
 
   document.addEventListener('visibilitychange', function () {

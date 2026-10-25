@@ -49,7 +49,8 @@ const documentStub = {
   getElementById: (id) => (id === 'game' ? gameCanvas : null),
   querySelectorAll: () => [], querySelector: () => null,
   addEventListener: () => {}, hidden: false,
-  body: { appendChild: () => {} }
+  documentElement: { clientWidth: 960, clientHeight: 600 },
+  body: { appendChild: () => {}, classList: { add() {}, remove() {}, toggle() {} } }
 };
 
 function FakeAC() {
@@ -65,6 +66,8 @@ function FakeAC() {
 // 模拟触屏设备
 const windowStub = {
   devicePixelRatio: 1,
+  innerWidth: 960,
+  innerHeight: 600,
   PointerEvent: function () {},
   addEventListener: (t, fn) => { (winListeners[t] = winListeners[t] || []).push(fn); },
   removeEventListener: () => {},
@@ -79,6 +82,7 @@ const sandbox = {
   performance: { now: () => now },
   requestAnimationFrame: (fn) => rafQ.push(fn),
   console, Math, Date, JSON, Set, Map, Array, Object, String, Number, Boolean, Error, Promise,
+  setTimeout: function (fn) { return 0; }, clearTimeout: function () {}, setInterval: function () { return 0; }, clearInterval: function () {},
   parseInt, parseFloat, isNaN, isFinite, Float32Array, Uint8ClampedArray
 };
 sandbox.globalThis = sandbox;
