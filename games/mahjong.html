@@ -418,7 +418,7 @@
     // 杠后补一张
     const t = drawFor(p);
     G.waitingFor = p === 0 ? 'discard' : 'ai';
-    if (p !== 0) setTimeout(() => aiTurn(p), 420);
+    if (p !== 0) setTimeout(() => { aiTurn(p); markDirty(); }, 420);
     return t;
   }
 
@@ -537,7 +537,7 @@
   function afterMeld(p) {
     if (p === 0) { G.waitingFor = 'discard'; return; }
     G.waitingFor = 'ai';
-    setTimeout(() => aiTurn(p), 420);
+    setTimeout(() => { aiTurn(p); markDirty(); }, 420);
   }
 
   function nextDraw() {
@@ -558,7 +558,7 @@
     // 暗杠检查（AI）
     if (p !== 0) {
       G.waitingFor = 'ai';
-      setTimeout(() => aiTurn(p), 460);
+      setTimeout(() => { aiTurn(p); markDirty(); }, 460);
     } else {
       G.waitingFor = 'discard';
     }
@@ -590,14 +590,27 @@
 
   function fit() {
     const raw = window.devicePixelRatio || 1;
-    dpr = Math.min(3, Math.max(1, raw));
+    const ndpr = Math.min(3, Math.max(1, raw));
     const w = canvasCssWidth(), h = canvasCssHeight();
-    cv.width = Math.round(w * dpr);
-    cv.height = Math.round(h * dpr);
-    const sx = w / VW, sy = h / VH;
-    scale = Math.min(sx, sy);
-    offX = (w - VW * scale) / 2;
-    offY = (h - VH * scale) / 2;
+    const bw = Math.round(w * ndpr), bh = Math.round(h * ndpr);
+    const nscale = Math.min(w / VW, h / VH);
+    const noffX = (w - VW * nscale) / 2;
+    const noffY = (h - VH * nscale) / 2;
+    // 关键：只有几何真的变了才动 canvas。
+    // 重设 cv.width 会清空整张位图并让浏览器重排，是「闪」的直接来源；
+    // 而 tickOrientation 每 700ms 就会调一次 fit，此前等于每 0.7 秒白闪一次。
+    if (ndpr === dpr && bw === cv.width && bh === cv.height &&
+        nscale === scale && noffX === offX && noffY === offY) {
+      return false;
+    }
+    dpr = ndpr;
+    cv.width = bw;
+    cv.height = bh;
+    scale = nscale;
+    offX = noffX;
+    offY = noffY;
+    markDirty();
+    return true;
   }
 
   function canvasCssWidth() { return cv.clientWidth || window.innerWidth || VW; }
@@ -1058,10 +1071,10 @@
   function onTap(clientX, clientY) {
     const p = toLogical(clientX, clientY);
     const b = hit(buttonHit, p.x, p.y);
-    if (b) { doAction(b.action); return; }
+    if (b) { doAction(b.action); markDirty(); return; }
     if (G.phase === 'playing' && G.turn === 0 && G.waitingFor === 'discard' && !G.pendingClaim) {
       const h = hit(handHit, p.x, p.y);
-      if (h) { playerDiscard(h.tile); }
+      if (h) { playerDiscard(h.tile); markDirty(); }
     }
   }
 
@@ -1172,9 +1185,11 @@
     const landscape = w > h * 1.04;
     const portraitPhone = isTouchDevice() && !landscape && h > w;
     const show = portraitPhone && !tipDismissed;
-    document.body.classList.toggle('tip-on', show);
+    const changed = document.body.classList.contains('tip-on') !== show;
+    if (changed) document.body.classList.toggle('tip-on', show);
     // 桌面浏览器（鼠标）不显示竖屏提示
-    if (!isTouchDevice()) document.body.classList.remove('tip-on');
+    if (show && !isTouchDevice()) document.body.classList.remove('tip-on');
+    // 桌面窗口尺寸稳定时这里不产生任何副作用（fit 内部已去重）
     fit();
   }
 
@@ -1185,34 +1200,48 @@
   fit();
   tickOrientation();
 
+  // 主循环：单一 rAF 驱动 + 脏标记，避免多驱动器节拍冲突导致画面闪烁
+  // 注意：这三个状态变量必须用 var（会提升且初始化为 undefined），
+  // 因为上方的 fit() 在初始化阶段就会间接调用 markDirty()。
+  // 用 let 会让 markDirty 在暂时性死区里抛 ReferenceError（已踩过两次）。
+  var lastPhase = null;
+  var dirty = true;
+  var lastAiStep = 0;
 
-  render();
+  function markDirty() { dirty = true; }
 
-  // 主循环：AI 行动与界面刷新靠状态驱动
-  let lastPhase = null;
-  let lastTick = 0;
   function tick() {
-    const now = Date.now();
-    if (now - lastTick < 120) return;     // rAF 与定时器双重驱动，限流
-    lastTick = now;
-
+    // AI 兜底推进：状态真的停在等待 AI 时才动，且限速 260ms
     if (G.phase === 'playing' && G.waitingFor === 'ai' && !G.pendingClaim) {
-      // 兜底：如果 AI 链条断了，推进一下
       const p = G.turn;
-      if (p !== 0) aiTurn(p);
+      const now = Date.now();
+      if (p !== 0 && now - lastAiStep >= 260) {
+        lastAiStep = now;
+        aiTurn(p);
+        dirty = true;
+      }
     }
     if (G.phase !== lastPhase) {
       lastPhase = G.phase;
       recomputeTenpai();
+      dirty = true;
     }
-    render();
+    // 状态没变就不重绘 —— 这才是消除闪烁的关键
+    if (dirty) {
+      dirty = false;
+      render();
+    }
   }
-  setInterval(tick, 160);
-  // 兜底：rAF 在后台标签页会被节流，定时器负责保活
-  (function loop() {
-    if (typeof requestAnimationFrame === 'function') requestAnimationFrame(loop);
+
+  function loop() {
     tick();
-  })();
+    requestAnimationFrame(loop);
+  }
+  if (typeof requestAnimationFrame === 'function') {
+    requestAnimationFrame(loop);
+  } else {
+    setInterval(tick, 160);
+  }
 
   /* ============================================================
    *  九、调试接口（供自动化测试读取内部状态）
@@ -1222,7 +1251,7 @@
     get turn() { return G.turn; },
     get waitingFor() { return G.waitingFor; },
     get wallLeft() { return G.wallLeft; },
-    get hand() { return G.players[0].hand.slice(); },
+    get hand() { return (G.players[0] ? G.players[0].hand.slice() : []); },
     get handCounts() { return G.players.map((p) => p.hand.length); },
     get melds() { return G.players.map((p) => p.melds.map((m) => m.type + ':' + m.tiles.join('-'))); },
     get discards() { return G.players.map((p) => p.discards.slice()); },

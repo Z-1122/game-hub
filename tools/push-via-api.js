@@ -1,5 +1,11 @@
-// 通过 GitHub REST API 上传文件（绕过 github.com 的 git 协议，改用稳定的 api.github.com）
-// 用法: node tools/push-via-api.js <owner> <repo> <token> [分支]
+// 通过 GitHub REST API 上传整个仓库（绕过 github.com 的 git 协议，改用稳定的 api.github.com）
+// 用法: node tools/push-via-api.js <owner> <repo> <token> [分支] [提交信息文本或信息文件路径]
+//
+// ⚠️ 历史教训（2026-10-26 踩坑）：
+// 本脚本原来把待上传文件写成**硬编码白名单**，结果 games/mahjong.html 不在名单里，
+// 每次「推送成功 PUSH_OK」都是假的——麻将的修复压根没上过线，用户看到的一直是旧版本。
+// 现在改为**递归扫描仓库目录**，默认上传全部文件，只有显式忽略规则才会跳过，并逐个打印，
+// 从机制上杜绝这种「静默漏传」。
 const fs = require('fs');
 const path = require('path');
 const https = require('https');
@@ -8,29 +14,34 @@ const OWNER = process.argv[2];
 const REPO = process.argv[3];
 const TOKEN = process.argv[4];
 const BRANCH = process.argv[5] || 'main';
+const MSG_ARG = process.argv[6] || '';
 const ROOT = path.join(__dirname, '..');
 
 if (!OWNER || !REPO || !TOKEN) {
-  console.error('用法: node tools/push-via-api.js <owner> <repo> <token> [branch]');
+  console.error('用法: node tools/push-via-api.js <owner> <repo> <token> [branch] [message|messageFile]');
   process.exit(1);
 }
 
-// 需要上传的文件（相对路径）
-const FILES = [
-  'index.html',
-  'games.json',
-  'README.md',
-  '离线版.html',
-  'games/echo.html',
-  'games/2048.html',
-  'tools/inject-nav.js',
-  'tools/build-offline.js',
-  'tools/push-via-api.js',
-  'tools/test-hub.js',
-  'tools/test-games.js',
-  'tools/test-touch.js',
-  'tools/test-mobile.js'
-];
+// 忽略规则：点开头（.git 等）、下划线开头（临时目录 _probe/_mt 等）、node_modules
+function ignored(name) {
+  return name.startsWith('.') || name.startsWith('_') || name === 'node_modules';
+}
+
+function walk(dir, base, out) {
+  for (const ent of fs.readdirSync(dir, { withFileTypes: true })) {
+    if (ignored(ent.name)) continue;
+    const full = path.join(dir, ent.name);
+    const rel = base ? base + '/' + ent.name : ent.name;
+    if (ent.isDirectory()) walk(full, rel, out);
+    else if (ent.isFile()) out.push(rel);
+  }
+  return out;
+}
+
+let MESSAGE = '更新游戏小屋';
+if (MSG_ARG) {
+  MESSAGE = fs.existsSync(MSG_ARG) ? fs.readFileSync(MSG_ARG, 'utf8').trim() : MSG_ARG;
+}
 
 function api(method, endpoint, body) {
   return new Promise((resolve, reject) => {
@@ -61,9 +72,9 @@ function api(method, endpoint, body) {
 }
 
 (async () => {
-  console.log(`上传到 ${OWNER}/${REPO} (分支 ${BRANCH})`);
+  const FILES = walk(ROOT, '', []).sort();
+  console.log(`上传到 ${OWNER}/${REPO} (分支 ${BRANCH})，共 ${FILES.length} 个文件`);
 
-  // 1) 取分支当前 HEAD，作为父提交
   let parentSha = null;
   const refRes = await api('GET', `/repos/${OWNER}/${REPO}/git/ref/heads/${BRANCH}`);
   if (refRes.status === 200) {
@@ -73,11 +84,9 @@ function api(method, endpoint, body) {
     console.log('  分支为空，将创建首个提交');
   }
 
-  // 2) 逐个创建 blob
   const tree = [];
   for (const rel of FILES) {
     const full = path.join(ROOT, rel);
-    if (!fs.existsSync(full)) { console.log(`  跳过（不存在）: ${rel}`); continue; }
     const content = fs.readFileSync(full);
     const isText = /\.(html|json|js|md|txt)$/i.test(rel);
     const blob = await api('POST', `/repos/${OWNER}/${REPO}/git/blobs`, {
@@ -92,7 +101,6 @@ function api(method, endpoint, body) {
     console.log(`  ✓ ${rel}  (${(content.length / 1024).toFixed(1)} KB)`);
   }
 
-  // 3) 创建 tree
   const treeBody = { tree };
   if (parentSha) treeBody.base_tree = parentSha;
   const treeRes = await api('POST', `/repos/${OWNER}/${REPO}/git/trees`, treeBody);
@@ -100,37 +108,41 @@ function api(method, endpoint, body) {
     console.error('!! tree 失败:', treeRes.status, JSON.stringify(treeRes.body).slice(0, 400));
     process.exit(1);
   }
-  console.log('  tree:', treeRes.body.sha.slice(0, 7));
 
-  // 4) 创建 commit
-  const commitBody = {
-    message: '游戏小屋：小游戏合集门户\n\n- 门户首页从 games.json 动态生成卡片，加游戏零改动 HTML\n- 收录 回声·ECHO 与 2048 两个游戏\n- tools/inject-nav.js 自动注入返回门户浮标（含浅色背景检测）\n- tools/ 下含门户与游戏的自动化测试',
+  const commitRes = await api('POST', `/repos/${OWNER}/${REPO}/git/commits`, {
+    message: MESSAGE,
     tree: treeRes.body.sha,
     parents: parentSha ? [parentSha] : []
-  };
-  const commitRes = await api('POST', `/repos/${OWNER}/${REPO}/git/commits`, commitBody);
+  });
   if (commitRes.status !== 201) {
     console.error('!! commit 失败:', commitRes.status, JSON.stringify(commitRes.body).slice(0, 400));
     process.exit(1);
   }
-  console.log('  commit:', commitRes.body.sha.slice(0, 7));
+  const newSha = commitRes.body.sha;
+  console.log('  commit:', newSha.slice(0, 7));
 
-  // 5) 更新或创建分支引用
-  let refRes2;
-  if (parentSha) {
-    refRes2 = await api('PATCH', `/repos/${OWNER}/${REPO}/git/refs/heads/${BRANCH}`, {
-      sha: commitRes.body.sha, force: true
-    });
-  } else {
-    refRes2 = await api('POST', `/repos/${OWNER}/${REPO}/git/refs`, {
-      ref: `refs/heads/${BRANCH}`, sha: commitRes.body.sha
-    });
-  }
+  const refRes2 = parentSha
+    ? await api('PATCH', `/repos/${OWNER}/${REPO}/git/refs/heads/${BRANCH}`, { sha: newSha, force: true })
+    : await api('POST', `/repos/${OWNER}/${REPO}/git/refs`, { ref: `refs/heads/${BRANCH}`, sha: newSha });
   if (refRes2.status !== 200 && refRes2.status !== 201) {
     console.error('!! 更新引用失败:', refRes2.status, JSON.stringify(refRes2.body).slice(0, 400));
     process.exit(1);
   }
 
+  // 推送后自检：重新从远端读回 tree，逐个核对大小，漏传/大小不符一律报错
+  console.log('\n推送后自检：');
+  const check = await api('GET', `/repos/${OWNER}/${REPO}/git/trees/${newSha}?recursive=1`);
+  const remote = {};
+  for (const e of (check.body.tree || [])) if (e.type === 'blob') remote[e.path] = e.size;
+  let bad = 0;
+  for (const rel of FILES) {
+    const localSize = fs.statSync(path.join(ROOT, rel)).size;
+    if (remote[rel] === undefined) { console.error(`  ✗ 远端缺失: ${rel}`); bad++; }
+    else if (remote[rel] !== localSize) { console.error(`  ✗ 大小不符: ${rel} 远端=${remote[rel]} 本地=${localSize}`); bad++; }
+  }
+  if (bad) { console.error(`\n自检失败：${bad} 个文件不一致`); process.exit(1); }
+
+  console.log(`  ✓ 全部 ${FILES.length} 个文件与本地一致`);
   console.log('\nPUSH_OK');
-  console.log('分支:', BRANCH, '->', commitRes.body.sha.slice(0, 7));
+  console.log('分支:', BRANCH, '->', newSha.slice(0, 7));
 })().catch((e) => { console.error('异常:', e.message); process.exit(1); });

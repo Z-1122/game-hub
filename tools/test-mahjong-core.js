@@ -14,7 +14,7 @@ function stubEl() {
   return {
     clientWidth: 1280, clientHeight: 720,
     getBoundingClientRect: () => ({ left: 0, top: 0, width: 1280, height: 720 }),
-    addEventListener: () => {}, classList: { add() {}, remove() {}, toggle() {} },
+    addEventListener: () => {}, classList: { add() {}, remove() {}, toggle() {}, contains: () => false },
     style: {}, getContext: () => ctxStub()
   };
 }
@@ -41,7 +41,7 @@ const sandbox = {
   document: {
     getElementById: () => stubEl(),
     documentElement: { clientWidth: 1280, clientHeight: 720 },
-    body: { classList: { add() {}, remove() {}, toggle() {} } },
+    body: { classList: { add() {}, remove() {}, toggle() {}, contains: () => false } },
     addEventListener: () => {}
   },
   navigator: { userAgent: 'node-test', maxTouchPoints: 0 },
@@ -88,6 +88,15 @@ function ok(cond, name, extra) {
 function eq(a, b, name) {
   ok(JSON.stringify(a) === JSON.stringify(b), name, '期望 ' + JSON.stringify(b) + ' 实得 ' + JSON.stringify(a));
 }
+
+/* ---------------- 0. 加载与初始化（回归防线） ----------------
+ * 曾经两次因为 let 的暂时性死区让 markDirty() 在 fit() 里抛 ReferenceError，
+ * 真机表现为加载即白屏，而只跑游戏逻辑的测试完全发现不了。
+ * 注意：断言必须放在 ok/pass 定义之后，否则测试脚本自己就会踩同样的 TDZ 坑。 */
+console.log('\n0) 加载与初始化');
+ok(dbg !== undefined && dbg !== null, '加载完成且调试接口可用');
+ok(dbg.state === 'title', '初始状态为标题页');
+ok(Array.isArray(dbg.hand) && dbg.hand.length === 0, '标题页尚无手牌');
 
 const wan = (n) => n, tiao = (n) => 10 + n, tong = (n) => 20 + n;
 const dong = 31, nan = 32, xi = 33, bei = 34, zhong = 35, fa = 36, bai = 37;
