@@ -151,36 +151,6 @@
   }
   .card:hover .play-hint, .card:focus-visible .play-hint { opacity: 1; transform: translateX(0); }
 
-  .badge-featured {
-    position: absolute; top: 18px; right: 20px;
-    font-size: 10px; letter-spacing: 0.12em; font-weight: 700;
-    padding: 3px 9px; border-radius: 999px;
-    color: #05070e; background: linear-gradient(135deg, var(--c1), var(--c2));
-  }
-
-  /* ---- 添加游戏提示 ---- */
-  .howto {
-    margin-top: 52px; padding: 26px 28px;
-    background: var(--panel); border: 1px solid var(--line); border-radius: 16px;
-  }
-  .howto h3 {
-    font-size: 13px; letter-spacing: 0.14em; text-transform: uppercase;
-    color: var(--accent); opacity: 0.75; margin-bottom: 16px;
-  }
-  .howto ol { list-style: none; counter-reset: step; }
-  .howto li {
-    counter-increment: step; position: relative;
-    padding-left: 34px; margin-bottom: 13px;
-    font-size: 13.5px; line-height: 1.65; color: rgba(196, 220, 238, 0.78);
-  }
-  .howto li::before {
-    content: counter(step);
-    position: absolute; left: 0; top: 1px;
-    width: 21px; height: 21px; border-radius: 50%;
-    display: grid; place-items: center;
-    font-size: 11px; font-weight: 700; color: #05070e;
-    background: linear-gradient(135deg, var(--accent), #a98bff);
-  }
   code {
     font-family: ui-monospace, "Cascadia Code", Consolas, monospace;
     font-size: 12.5px; padding: 2px 7px; border-radius: 5px;
@@ -250,18 +220,9 @@
   <main>
     <div class="grid" id="grid"></div>
     <div class="empty" id="empty" hidden>
-      还没有游戏。在 <code>games.json</code> 里添加一条就会出现在这里。
+      还没有游戏。
     </div>
 
-    <section class="howto">
-      <h3>离线版说明</h3>
-      <ol>
-        <li>这份是<b>离线版</b>，游戏列表已写死在本文件里，双击就能开</li>
-        <li>要加新游戏，请改 <code>games.json</code>，然后重新生成离线版</li>
-        <li>重新生成命令：<code>node tools/build-offline.js</code></li>
-        <li>联网时建议直接用<b>在线版</b>，推送后自动更新，无需重新生成</li>
-      </ol>
-    </section>
   </main>
 
   <footer>
@@ -301,7 +262,6 @@
       : '';
 
     a.innerHTML =
-      (game.featured ? '<span class="badge-featured">主打</span>' : '') +
       '<div class="card-top">' +
         '<div class="icon">' + esc(game.icon || '▶') + '</div>' +
         '<div>' +
@@ -319,7 +279,10 @@
 
   function render(data) {
     var site = data.site || {};
-    var games = data.games || [];
+    // 按日期从新到旧排，顺序由 games.json 里的 date 决定
+    var games = (data.games || []).slice().sort(function (a, b) {
+      return String(b.date || '').localeCompare(String(a.date || ''));
+    });
 
     if (site.title) {
       document.getElementById('siteTitle').innerHTML =
@@ -338,7 +301,6 @@
 
     stats.innerHTML =
       '<div><b>' + games.length + '</b>个游戏</div>' +
-      '<div><b>' + games.filter(function (g) { return g.featured; }).length + '</b>个主打</div>' +
       '<div><b>' + new Set(games.reduce(function (acc, g) {
         return acc.concat(g.tags || []);
       }, [])).size + '</b>种标签</div>';
@@ -373,7 +335,6 @@
       "accent": "#5ff0ff",
       "accent2": "#a98bff",
       "icon": "◉",
-      "featured": true,
       "controls": "键盘：WASD 移动 · 空格 召唤 · Shift 冲刺 ｜ 手机：左摇杆 + 右下按钮",
       "date": "2026-10-25"
     },
@@ -391,7 +352,6 @@
       "accent": "#ffcd6b",
       "accent2": "#ff8a5b",
       "icon": "⬢",
-      "featured": false,
       "controls": "方向键 / WASD 移动 · 手机可滑动",
       "date": "2026-07-09"
     },
@@ -411,7 +371,6 @@
       "accent": "#7fe3a4",
       "accent2": "#4bb3d4",
       "icon": "🀄",
-      "featured": false,
       "controls": "鼠标 / 手指点击出牌 · 碰杠胡按钮自动出现 ｜ 手机：点开始自动全屏 · 右上角可开关声音",
       "date": "2026-10-26"
     }

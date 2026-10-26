@@ -151,36 +151,6 @@
   }
   .card:hover .play-hint, .card:focus-visible .play-hint { opacity: 1; transform: translateX(0); }
 
-  .badge-featured {
-    position: absolute; top: 18px; right: 20px;
-    font-size: 10px; letter-spacing: 0.12em; font-weight: 700;
-    padding: 3px 9px; border-radius: 999px;
-    color: #05070e; background: linear-gradient(135deg, var(--c1), var(--c2));
-  }
-
-  /* ---- 添加游戏提示 ---- */
-  .howto {
-    margin-top: 52px; padding: 26px 28px;
-    background: var(--panel); border: 1px solid var(--line); border-radius: 16px;
-  }
-  .howto h3 {
-    font-size: 13px; letter-spacing: 0.14em; text-transform: uppercase;
-    color: var(--accent); opacity: 0.75; margin-bottom: 16px;
-  }
-  .howto ol { list-style: none; counter-reset: step; }
-  .howto li {
-    counter-increment: step; position: relative;
-    padding-left: 34px; margin-bottom: 13px;
-    font-size: 13.5px; line-height: 1.65; color: rgba(196, 220, 238, 0.78);
-  }
-  .howto li::before {
-    content: counter(step);
-    position: absolute; left: 0; top: 1px;
-    width: 21px; height: 21px; border-radius: 50%;
-    display: grid; place-items: center;
-    font-size: 11px; font-weight: 700; color: #05070e;
-    background: linear-gradient(135deg, var(--accent), #a98bff);
-  }
   code {
     font-family: ui-monospace, "Cascadia Code", Consolas, monospace;
     font-size: 12.5px; padding: 2px 7px; border-radius: 5px;
@@ -232,18 +202,9 @@
   <main>
     <div class="grid" id="grid"></div>
     <div class="empty" id="empty" hidden>
-      还没有游戏。在 <code>games.json</code> 里添加一条就会出现在这里。
+      还没有游戏。
     </div>
 
-    <section class="howto">
-      <h3>以后怎么加游戏</h3>
-      <ol>
-        <li>把游戏文件放进 <code>games/</code> 文件夹，例如 <code>games/snake.html</code></li>
-        <li>打开根目录的 <code>games.json</code>，在 <code>games</code> 数组里加一条记录</li>
-        <li>填好 <code>name</code>、<code>file</code>、<code>tagline</code>、<code>tags</code> 和配色 <code>accent</code></li>
-        <li>提交并推送，网页刷新后卡片自动出现——<b>不需要改任何 HTML</b></li>
-      </ol>
-    </section>
   </main>
 
   <footer>
@@ -283,7 +244,6 @@
       : '';
 
     a.innerHTML =
-      (game.featured ? '<span class="badge-featured">主打</span>' : '') +
       '<div class="card-top">' +
         '<div class="icon">' + esc(game.icon || '▶') + '</div>' +
         '<div>' +
@@ -301,7 +261,10 @@
 
   function render(data) {
     var site = data.site || {};
-    var games = data.games || [];
+    // 按日期从新到旧排，顺序由 games.json 里的 date 决定
+    var games = (data.games || []).slice().sort(function (a, b) {
+      return String(b.date || '').localeCompare(String(a.date || ''));
+    });
 
     if (site.title) {
       document.getElementById('siteTitle').innerHTML =
@@ -320,7 +283,6 @@
 
     stats.innerHTML =
       '<div><b>' + games.length + '</b>个游戏</div>' +
-      '<div><b>' + games.filter(function (g) { return g.featured; }).length + '</b>个主打</div>' +
       '<div><b>' + new Set(games.reduce(function (acc, g) {
         return acc.concat(g.tags || []);
       }, [])).size + '</b>种标签</div>';

@@ -66,19 +66,7 @@ const banner = `
 `;
 html = html.replace('<header>', banner + '\n  <header>');
 
-// 4) 把「以后怎么加游戏」改成离线版说明
-const howto = html.match(/<section class="howto">[\s\S]*?<\/section>/);
-if (howto) {
-  html = html.replace(howto[0], `<section class="howto">
-      <h3>离线版说明</h3>
-      <ol>
-        <li>这份是<b>离线版</b>，游戏列表已写死在本文件里，双击就能开</li>
-        <li>要加新游戏，请改 <code>games.json</code>，然后重新生成离线版</li>
-        <li>重新生成命令：<code>node tools/build-offline.js</code></li>
-        <li>联网时建议直接用<b>在线版</b>，推送后自动更新，无需重新生成</li>
-      </ol>
-    </section>`);
-}
+// 4) 门户页底部原有的「加游戏」教学块已在 2026-10-27 按用户要求整段删除，这里不再注入任何内容
 
 // 5) 把游戏链接改成可直接双击的同目录路径（离线版与 games/ 同目录，路径无需变）
 //    games/*.html 在离线版里仍是相对路径，file:// 下点击可正常跳转。

@@ -16,7 +16,6 @@
       "accent": "#5ff0ff",
       "accent2": "#a98bff",
       "icon": "◉",
-      "featured": true,
       "controls": "键盘：WASD 移动 · 空格 召唤 · Shift 冲刺 ｜ 手机：左摇杆 + 右下按钮",
       "date": "2026-10-25"
     },
@@ -30,7 +29,6 @@
       "accent": "#ffcd6b",
       "accent2": "#ff8a5b",
       "icon": "⬢",
-      "featured": false,
       "controls": "方向键 / WASD 移动 · 手机可滑动",
       "date": "2026-07-09"
     },
@@ -44,7 +42,6 @@
       "accent": "#7fe3a4",
       "accent2": "#4bb3d4",
       "icon": "🀄",
-      "featured": false,
       "controls": "鼠标 / 手指点击出牌 · 碰杠胡按钮自动出现 ｜ 手机：点开始自动全屏 · 右上角可开关声音",
       "date": "2026-10-26"
     }

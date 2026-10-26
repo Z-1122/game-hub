@@ -98,8 +98,8 @@ games/your-game/script.js
   "accent": "#5ff0ff",
   "accent2": "#a98bff",
   "icon": "★",
-  "featured": false,
-  "controls": "方向键 移动 · 空格 跳跃"
+  "controls": "方向键 移动 · 空格 跳跃",
+  "date": "2026-10-27"
 }
 ```
 
@@ -115,9 +115,8 @@ games/your-game/script.js
 | `tags` | 否 | 标签数组，会显示成小胶囊 |
 | `accent` / `accent2` | 否 | 卡片主题色（渐变的两个色），默认青色到紫色 |
 | `icon` | 否 | 卡片图标，建议用单个字符（如 `◉` `★` `⬢`） |
-| `featured` | 否 | `true` 会在卡片上显示「主打」角标 |
 | `controls` | 否 | 操作说明，显示在卡片底部 |
-| `date` | 否 | 日期，备用 |
+| `date` | 否 | 日期，决定卡片顺序（新的排在前面） |
 
 ### 3. 提交
 
