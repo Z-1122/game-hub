@@ -81,7 +81,9 @@ server.listen(PORT, '127.0.0.1', () => {
     try {
       const cards = els.grid.children;
       console.log('渲染卡片数:', cards.length);
-      if (cards.length !== 2) throw new Error('期望 2 张卡片，实际 ' + cards.length);
+      // 期望卡片数与 games.json 中的游戏数一致（不再写死数字，避免加游戏后测试失效）
+      const expected = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'games.json'), 'utf8')).games.length;
+      if (cards.length !== expected) throw new Error('期望 ' + expected + ' 张卡片，实际 ' + cards.length);
 
       cards.forEach((c, i) => {
         const hasName = /<h2>/.test(c.innerHTML);
