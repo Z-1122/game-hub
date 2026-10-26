@@ -91,6 +91,17 @@
     border-radius: 0;
     box-shadow: none;
   }
+
+  /* 全屏：铺满整个屏幕，并隐藏导航浮标 */
+  body.fullscreen-mode #wrap {
+    width: min(100vw, 160dvh);
+    aspect-ratio: 8 / 5;
+  }
+  body.fullscreen-mode canvas {
+    border-radius: 0;
+    box-shadow: none;
+  }
+  body.fullscreen-mode #hub-nav { display: none; }
 </style>
 
 <style data-hub-nav="css">
@@ -392,12 +403,15 @@
   // 触屏按钮的命中区域（逻辑坐标），在 drawTouchUI 里同步绘制
   const BTN = {
     summon: { x: W - 96, y: H - 96, r: 52, label: '回声' },
-    dash: { x: W - 196, y: H - 62, r: 38, label: '冲刺' }
+    dash: { x: W - 196, y: H - 62, r: 38, label: '冲刺' },
+    full: { x: W - 46, y: 104, r: 22, label: '全屏' }
   };
-  const btnPulse = { summon: 0, dash: 0 };  // 按下反馈动画
+  const btnPulse = { summon: 0, dash: 0, full: 0 };  // 按下反馈动画
 
   let isTouch = false;      // 是否检测到触屏设备
   let touchHintT = 0;       // 触屏操作提示的显示计时
+  let isFullscreen = false; // 是否处于全屏
+  let fsBlocked = false;    // 浏览器拒绝/不支持全屏时置位
 
   const echoes = [];
   const bullets = [];
@@ -803,6 +817,7 @@
     if (chargeFlash > 0) chargeFlash = Math.max(0, chargeFlash - dt);
     if (btnPulse.summon > 0) btnPulse.summon = Math.max(0, btnPulse.summon - dt * 4);
     if (btnPulse.dash > 0) btnPulse.dash = Math.max(0, btnPulse.dash - dt * 4);
+    if (btnPulse.full > 0) btnPulse.full = Math.max(0, btnPulse.full - dt * 4);
     if (touchHintT > 0) touchHintT = Math.max(0, touchHintT - dt);
     if (announce) {
       announce.life -= dt;
@@ -1276,6 +1291,49 @@
     ctx.font = '700 13px ' + FONT;
     ctx.fillText('冲刺', btnDash.x, btnDash.y);
     ctx.textBaseline = 'alphabetic';
+
+    // 全屏按钮（只在支持全屏的浏览器显示）
+    if (fsSupported()) {
+      const bf = BTN.full;
+      const fp = btnPulse.full;
+      const on = isFullscreen;
+      const fr = bf.r * (1 + fp * 0.12);
+      glow(SPR.cyan, bf.x, bf.y, fr * 1.7, 0.16 + fp * 0.2);
+      ctx.beginPath();
+      ctx.arc(bf.x, bf.y, fr, 0, TAU);
+      ctx.fillStyle = 'rgba(10,20,34,0.55)';
+      ctx.fill();
+      ctx.strokeStyle = 'rgba(150,215,245,' + (0.42 + fp * 0.3) + ')';
+      ctx.lineWidth = 1.6;
+      ctx.stroke();
+
+      // 四角图标：全屏时画向内的角，否则向外
+      const s = 8;
+      const d = on ? s : s * 0.55;
+      const c = s * 0.55;
+      ctx.beginPath();
+      // 左上
+      ctx.moveTo(bf.x - d, bf.y - c + (on ? 0 : 0));
+      ctx.lineTo(bf.x - d, bf.y - d);
+      ctx.lineTo(bf.x - c, bf.y - d);
+      // 右上
+      ctx.moveTo(bf.x + d, bf.y - c);
+      ctx.lineTo(bf.x + d, bf.y - d);
+      ctx.lineTo(bf.x + c, bf.y - d);
+      // 左下
+      ctx.moveTo(bf.x - d, bf.y + c);
+      ctx.lineTo(bf.x - d, bf.y + d);
+      ctx.lineTo(bf.x - c, bf.y + d);
+      // 右下
+      ctx.moveTo(bf.x + d, bf.y + c);
+      ctx.lineTo(bf.x + d, bf.y + d);
+      ctx.lineTo(bf.x + c, bf.y + d);
+      ctx.strokeStyle = 'rgba(190,240,255,' + (on ? 0.9 : 0.75) + ')';
+      ctx.lineWidth = 1.8;
+      ctx.lineCap = 'round';
+      ctx.stroke();
+      ctx.lineCap = 'butt';
+    }
   }
 
   function drawAnnounce() {
@@ -1515,6 +1573,10 @@
     const p = toLogical(e.clientX, e.clientY);
 
     if (state === 'title' || state === 'over') {
+      // 手机横屏时，趁这次用户手势直接进全屏（浏览器只允许手势内请求）
+      if (isTouch && isLandscapeNow() && !fsBlocked && !fsElement()) {
+        enterFullscreen();
+      }
       startGame();
       touchHintT = 5;
       return;
@@ -1522,6 +1584,11 @@
     if (state !== 'playing' || paused) return;
 
     // 先判断按钮
+    if (fsSupported() && hitBtn(p, BTN.full)) {
+      btnPulse.full = 1;
+      toggleFullscreen();
+      return;
+    }
     if (hitBtn(p, BTN.summon)) {
       btnPulse.summon = 1;
       summonEcho();
@@ -1659,6 +1726,64 @@
     document.body.classList.toggle('tip-on', showTip);
     fit();
   }
+
+  /* ---------------- 全屏 ---------------- */
+  function fsElement() {
+    return document.fullscreenElement || document.webkitFullscreenElement ||
+      document.msFullscreenElement || null;
+  }
+
+  function fsSupported() {
+    const el = document.documentElement;
+    return !!(el && (el.requestFullscreen || el.webkitRequestFullscreen || el.msRequestFullscreen));
+  }
+
+  function onFsChange() {
+    isFullscreen = !!fsElement();
+    document.body.classList.toggle('fullscreen-mode', isFullscreen);
+    fit();
+  }
+
+  function enterFullscreen() {
+    if (fsBlocked) return;
+    if (!fsSupported()) { fsBlocked = true; return; }
+    const el = document.documentElement;
+    const req = el.requestFullscreen || el.webkitRequestFullscreen || el.msRequestFullscreen;
+    try {
+      const p = req.call(el, { navigationUI: 'hide' });
+      if (p && typeof p.catch === 'function') {
+        p.catch(function () { fsBlocked = true; });
+      }
+    } catch (err) {
+      fsBlocked = true;
+    }
+    // 全屏后尝试锁定横屏（安卓 Chrome 支持，失败无副作用）
+    try {
+      if (screen.orientation && screen.orientation.lock) {
+        const lp = screen.orientation.lock('landscape');
+        if (lp && typeof lp.catch === 'function') lp.catch(function () {});
+      }
+    } catch (err) { /* 忽略 */ }
+  }
+
+  function exitFullscreen() {
+    const ex = document.exitFullscreen || document.webkitExitFullscreen || document.msExitFullscreen;
+    try {
+      if (ex) {
+        const p = ex.call(document);
+        if (p && typeof p.catch === 'function') p.catch(function () {});
+      }
+    } catch (err) { /* 忽略 */ }
+  }
+
+  function toggleFullscreen() {
+    if (fsElement()) exitFullscreen();
+    else enterFullscreen();
+  }
+
+  document.addEventListener('fullscreenchange', onFsChange);
+  document.addEventListener('webkitfullscreenchange', onFsChange);
+  document.addEventListener('msfullscreenchange', onFsChange);
 
   (function rotateTip() {
     const skip = document.getElementById('rotate-skip');
