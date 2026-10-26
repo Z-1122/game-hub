@@ -32,12 +32,49 @@ function ctxStub() {
   }, { get(t, k) { return k in t ? t[k] : noop; }, set() { return true; } });
 }
 
+// —— AudioContext 桩：让音效合成真的跑一遍，验证没有 API 误用 ——
+const audioStats = { osc: 0, gain: 0, buf: 0, src: 0, filter: 0 };
+function fakeParam() {
+  return {
+    value: 0,
+    setValueAtTime() {}, exponentialRampToValueAtTime() {}, linearRampToValueAtTime() {}
+  };
+}
+function fakeAudioContext() {
+  this.state = 'running';
+  this.currentTime = 0;
+  this.sampleRate = 44100;
+  this.destination = {};
+}
+fakeAudioContext.prototype.resume = function () {};
+fakeAudioContext.prototype.createOscillator = function () {
+  audioStats.osc++;
+  return { type: 'sine', frequency: fakeParam(), connect() {}, start() {}, stop() {} };
+};
+fakeAudioContext.prototype.createGain = function () {
+  audioStats.gain++;
+  return { gain: fakeParam(), connect() {} };
+};
+fakeAudioContext.prototype.createBuffer = function (ch, len) {
+  audioStats.buf++;
+  return { getChannelData: () => new Float32Array(len) };
+};
+fakeAudioContext.prototype.createBufferSource = function () {
+  audioStats.src++;
+  return { buffer: null, connect() {}, start() {} };
+};
+fakeAudioContext.prototype.createBiquadFilter = function () {
+  audioStats.filter++;
+  return { type: 'lowpass', frequency: { value: 0 }, Q: { value: 0 }, connect() {} };
+};
+
 const sandbox = {
   console, Math, Date, JSON, Set, Map, Array, Object, String, Number, Boolean, Error,
   parseInt, parseFloat, isNaN, Infinity, NaN, undefined,
   setTimeout: (fn) => { if (typeof fn === 'function') aiQueue.push(fn); return aiQueue.length; },
   clearTimeout: () => {}, setInterval: () => 0, clearInterval: () => {},
   requestAnimationFrame: () => 0,
+  AudioContext: fakeAudioContext,
   document: {
     getElementById: () => stubEl(),
     documentElement: { clientWidth: 1280, clientHeight: 720 },
@@ -251,6 +288,41 @@ for (let g = 0; g < 60; g++) {
 ok(errors === 0, '60 局无异常', '异常 ' + errors + ' 次');
 ok(stuck === 0, '60 局都能走到结束（无卡死）', '卡死 ' + stuck + ' 局');
 ok(gamesDone > 0, '至少完成若干局', '完成 ' + gamesDone + ' 局（' + wins + ' 有胡 / ' + draws + ' 流局）');
+
+/* ---------------- 7. 音效模块（假 AudioContext 真跑） ---------------- */
+console.log('\n7) 音效模块');
+const oscBefore = audioStats.osc, bufBefore = audioStats.buf;
+try {
+  dbg.sfxAll();
+  ok(true, '所有音效调用不抛异常');
+} catch (e) {
+  ok(false, '所有音效调用不抛异常', e.message);
+}
+ok(audioStats.osc > oscBefore, '音效真的创建了振荡器', 'osc +' + (audioStats.osc - oscBefore));
+ok(audioStats.buf > bufBefore, '噪声脉冲创建了 AudioBuffer', 'buf +' + (audioStats.buf - bufBefore));
+ok(audioStats.gain > 0 && audioStats.filter > 0, '增益与滤波节点都被使用');
+try {
+  ok(dbg.fsSupported() === false, '无全屏 API 的环境下 fsSupported 返回 false（不画全屏按钮）');
+  dbg.toggleFullscreen();
+  ok(true, '无全屏 API 时调用 toggleFullscreen 不抛异常');
+} catch (e) {
+  ok(false, '全屏相关调用不抛异常', e.message);
+}
+
+/* ---------------- 8. 源码特征回归（防止后续改动把新功能弄丢） ---------------- */
+console.log('\n8) 源码特征回归');
+const script = m[1];
+ok(!/\bchi\b/.test(script) && !/applyChi/.test(script), '已彻底移除「吃」');
+ok(/drawFeltPattern\s*\(\)/.test(script), '牌桌背景图案仍在渲染路径上');
+ok(/function drawBird/.test(script) && /function drawStick/.test(script) && /function drawDot/.test(script),
+  '真牌面绘制（鸟 / 竹条 / 圆点）齐全');
+ok(/PIP_POS/.test(script) && /STICK_POS/.test(script) && /TILE_GLYPH/.test(script),
+  '筒/条/字牌的排布表与字形表齐全');
+ok(/function sfxPon/.test(script) && /function sfxKan/.test(script) && /function sfxDiscard/.test(script),
+  '碰 / 杠 / 出牌音效函数齐全');
+ok(/requestFullscreen/.test(script) && /action: 'fullscreen'/.test(script), '全屏按钮与全屏 API 齐全');
+ok(/function drawSystemButtons/.test(script), '右上角系统按钮绘制函数存在');
+ok(/本玩法不含「吃」/.test(script), '标题页写明了本玩法不含「吃」');
 
 /* ---------------- 结果 ---------------- */
 console.log('\n结果: ' + pass + ' 通过, ' + fail + ' 失败');

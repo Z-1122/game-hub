@@ -245,7 +245,7 @@
     return {
       id: i,
       hand: [],
-      melds: [],        // { type:'chi'|'pon'|'kan', tiles:[...], from }
+      melds: [],        // { type:'pon'|'kan', tiles:[...], from }
       discards: [],
       isAI: i !== 0,
       drawn: null,
@@ -321,11 +321,12 @@
     pl.drawn = t;
     G.drawnTile = t;
     G.wallLeft = G.wall.length;
+    sfxDrawTile();
     return t;
   }
 
   /* ============================================================
-   *  四、动作：打牌 / 吃 / 碰 / 杠 / 胡
+   *  四、动作：打牌 / 碰 / 杠 / 胡（本玩法不含「吃」）
    * ============================================================ */
 
   function discard(p, tile) {
@@ -338,7 +339,8 @@
     G.lastDiscard = { tile: tile, from: p };
     G.drawnTile = null;
     pl.drawn = null;
-    // 玩家出牌后，检查其他三家是否有可吃碰杠胡的机会
+    sfxDiscard();
+    // 玩家出牌后，检查其他三家是否有碰杠胡的机会
     G.turn = (p + 1) % 4;
     offerClaims(p, tile);
     return true;
@@ -353,17 +355,7 @@
 
     if (same >= 2) opts.push('pon');
     if (same >= 3) opts.push('kan');
-    // 吃：只能吃上家（前一位）打出的牌，且必须是数牌
-    const isNextPlayer = (G.lastDiscard && (G.lastDiscard.from + 1) % 4 === p);
-    if (isNextPlayer && !T.isHonor(tile)) {
-      const n = T.numOf(tile), s = T.suitOf(tile);
-      const base = tile - n;
-      const has = (k) => pl.hand.includes(base + k);
-      if (n >= 3 && has(n - 2) && has(n - 1)) opts.push('chi');
-      if (n >= 2 && n <= 8 && has(n - 1) && has(n + 1)) opts.push('chi');
-      if (n <= 7 && has(n + 1) && has(n + 2)) opts.push('chi');
-      if (n >= 3 && has(n - 1) && has(n + 1)) opts.push('chi');
-    }
+    // 本玩法不含「吃」（用户要求去掉），只能碰 / 杠 / 胡
     // 胡：把这张牌加入手牌后能否成胡
     const test = pl.hand.concat([tile]);
     if (canWin(test, pl.melds.length)) opts.push('hu');
@@ -399,6 +391,7 @@
     pl.drawn = null;
     G.drawnTile = null;
     pushLog(SEAT_NAMES[p] + ' 碰了 ' + T.short(tile));
+    sfxPon();
   }
 
   function applyKan(p, tile, from, isConcealed) {
@@ -414,26 +407,13 @@
       G.lastDiscard = null;
       pushLog(SEAT_NAMES[p] + ' 杠了 ' + T.short(tile));
     }
+    sfxKan();
     G.turn = p;
     // 杠后补一张
     const t = drawFor(p);
     G.waitingFor = p === 0 ? 'discard' : 'ai';
     if (p !== 0) setTimeout(() => { aiTurn(p); markDirty(); }, 420);
     return t;
-  }
-
-  function applyChi(p, tile, from, combo) {
-    const pl = G.players[p];
-    // combo 是要用手牌里的哪两张（如 [t-2, t-1]）
-    for (const c of combo) pl.hand.splice(pl.hand.indexOf(c), 1);
-    const tiles = combo.concat([tile]).sort((a, b) => a - b);
-    pl.melds.push({ type: 'chi', tiles: tiles, from: from });
-    G.players[from].discards.pop();
-    G.lastDiscard = null;
-    G.turn = p;
-    pl.drawn = null;
-    G.drawnTile = null;
-    pushLog(SEAT_NAMES[p] + ' 吃了 ' + T.short(tile));
   }
 
   function declareWin(p, tile, from, selfDraw) {
@@ -444,6 +424,7 @@
     if (!selfDraw && tile != null) pl.hand.push(tile);
     sortHand(pl.hand);
     pushLog(SEAT_NAMES[p] + (selfDraw ? ' 自摸！' : ' 胡了 ' + T.short(tile) + '！'));
+    if (p === 0) sfxHu(); else sfxOtherWin();
   }
 
   function endRound(winner, reason) {
@@ -451,6 +432,7 @@
     G.winner = winner;
     G.waitingFor = 'none';
     pushLog(reason);
+    sfxFlow();
   }
 
   /* ============================================================
@@ -578,6 +560,117 @@
   }
 
   /* ============================================================
+   *  五点五、音效（WebAudio 实时合成，零外部资源）
+   *  首次交互时创建 / 恢复 AudioContext（浏览器自动播放策略要求）
+   * ============================================================ */
+
+  let AC = null;
+  let muted = (function () {
+    try { return localStorage.getItem('mj_muted') === '1'; } catch (e) { return false; }
+  })();
+
+  function audioCtx() {
+    if (muted) return null;
+    try {
+      if (!AC) {
+        const C = window.AudioContext || window.webkitAudioContext;
+        if (!C) return null;
+        AC = new C();
+      }
+      if (AC.state === 'suspended' && AC.resume) AC.resume();
+      return AC;
+    } catch (e) { return null; }
+  }
+
+  function nowT() { const a = audioCtx(); return a ? a.currentTime : null; }
+
+  // 一个振荡器音符：f0 → f1 扫频
+  function tone(t0, dur, f0, f1, type, vol) {
+    const a = audioCtx(); if (!a) return;
+    try {
+      const o = a.createOscillator(), g = a.createGain();
+      o.type = type || 'sine';
+      o.frequency.setValueAtTime(f0, t0);
+      if (f1 && f1 !== f0) o.frequency.exponentialRampToValueAtTime(Math.max(1, f1), t0 + dur);
+      g.gain.setValueAtTime(0.0001, t0);
+      g.gain.exponentialRampToValueAtTime(Math.max(0.0002, vol || 0.1), t0 + 0.006);
+      g.gain.exponentialRampToValueAtTime(0.0001, t0 + dur);
+      o.connect(g); g.connect(a.destination);
+      o.start(t0); o.stop(t0 + dur + 0.03);
+    } catch (e) { /* 忽略音频异常 */ }
+  }
+
+  // 噪声脉冲：模拟牌碰桌的「啪」
+  function noiseHit(t0, dur, vol, hz) {
+    const a = audioCtx(); if (!a) return;
+    try {
+      const n = Math.max(1, Math.floor(a.sampleRate * dur));
+      const buf = a.createBuffer(1, n, a.sampleRate);
+      const d = buf.getChannelData(0);
+      for (let i = 0; i < n; i++) d[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / n, 2.2);
+      const src = a.createBufferSource(); src.buffer = buf;
+      const f = a.createBiquadFilter();
+      f.type = 'bandpass'; f.frequency.value = hz || 1800; f.Q.value = 0.9;
+      const g = a.createGain(); g.gain.value = vol || 0.1;
+      src.connect(f); f.connect(g); g.connect(a.destination);
+      src.start(t0);
+    } catch (e) { /* 忽略音频异常 */ }
+  }
+
+  function sfxDiscard() {              // 出牌：短促木质「啪」
+    const t = nowT(); if (t === null) return;
+    noiseHit(t, 0.055, 0.13, 2400);
+    tone(t, 0.085, 210, 120, 'triangle', 0.10);
+  }
+  function sfxDrawTile() {             // 摸牌：轻「嗒」
+    const t = nowT(); if (t === null) return;
+    noiseHit(t, 0.035, 0.05, 3200);
+  }
+  function sfxPon() {                  // 碰：两连击 + 明亮和弦
+    const t = nowT(); if (t === null) return;
+    noiseHit(t, 0.06, 0.17, 1500);
+    noiseHit(t + 0.085, 0.07, 0.19, 1350);
+    tone(t, 0.11, 392, 392, 'square', 0.05);
+    tone(t + 0.085, 0.22, 587, 587, 'square', 0.05);
+  }
+  function sfxKan() {                  // 杠：三连击，更厚重
+    const t = nowT(); if (t === null) return;
+    for (let i = 0; i < 3; i++) {
+      noiseHit(t + i * 0.075, 0.07, 0.18, 1200 - i * 120);
+      tone(t + i * 0.075, 0.1, 300 - i * 20, 240, 'triangle', 0.055);
+    }
+    tone(t + 0.24, 0.3, 196, 196, 'sawtooth', 0.045);
+  }
+  function sfxHu() {                   // 自己胡：上行琶音
+    const t = nowT(); if (t === null) return;
+    const seq = [523, 659, 784, 1047, 1319];
+    for (let i = 0; i < seq.length; i++) {
+      tone(t + i * 0.085, i === seq.length - 1 ? 0.5 : 0.18, seq[i], seq[i], 'triangle', 0.09);
+    }
+    noiseHit(t, 0.05, 0.1, 2600);
+  }
+  function sfxOtherWin() {             // 别人胡：下行两声
+    const t = nowT(); if (t === null) return;
+    tone(t, 0.22, 392, 392, 'triangle', 0.08);
+    tone(t + 0.18, 0.36, 294, 294, 'triangle', 0.08);
+  }
+  function sfxFlow() {                 // 流局：低沉一下
+    const t = nowT(); if (t === null) return;
+    tone(t, 0.5, 220, 165, 'sine', 0.07);
+  }
+  function sfxTap() {                  // 按钮
+    const t = nowT(); if (t === null) return;
+    tone(t, 0.05, 880, 660, 'square', 0.04);
+  }
+
+  function toggleMute() {
+    muted = !muted;
+    try { localStorage.setItem('mj_muted', muted ? '1' : '0'); } catch (e) { /* 忽略 */ }
+    if (!muted) sfxTap();
+    markDirty();
+  }
+
+  /* ============================================================
    *  六、渲染
    * ============================================================ */
 
@@ -622,7 +715,7 @@
 
   // 牌面尺寸
   // 构建标记：用于确认浏览器实际加载的是哪一版（部署漏传 / 缓存排查用）
-  const BUILD = '2026-10-26 #3';
+  const BUILD = '2026-10-26 #4';
 
   const TW = 46, TH = 64;         // 竖着的牌（手牌/牌河）
   const TD = 0.30;                // 牌的「厚度」比率（用于侧向牌）
@@ -636,6 +729,148 @@
     ctx.arcTo(x, y + h, x, y, rr);
     ctx.arcTo(x, y, x + w, y, rr);
     ctx.closePath();
+  }
+
+  /* ---- 牌面样式：仿真实麻将牌（万/筒/条/字牌） ---- */
+  const TILE_GLYPH = { dong: '東', nan: '南', xi: '西', bei: '北', zhong: '中', fa: '發', bai: '白' };
+  const INK = '#202c25';
+  const INK_RED = '#b8352e';
+  const INK_GREEN = '#1c7a45';
+  const INK_BLUE = '#2a5580';
+
+  // 筒子点位（相对内区的 0~1 坐标）
+  const PIP_POS = {
+    1: [[0.5, 0.5]],
+    2: [[0.5, 0.28], [0.5, 0.72]],
+    3: [[0.27, 0.24], [0.5, 0.5], [0.73, 0.76]],
+    4: [[0.3, 0.28], [0.7, 0.28], [0.3, 0.72], [0.7, 0.72]],
+    5: [[0.28, 0.24], [0.72, 0.24], [0.5, 0.5], [0.28, 0.76], [0.72, 0.76]],
+    6: [[0.3, 0.2], [0.7, 0.2], [0.3, 0.5], [0.7, 0.5], [0.3, 0.8], [0.7, 0.8]],
+    7: [[0.24, 0.18], [0.5, 0.26], [0.76, 0.34], [0.34, 0.64], [0.66, 0.64], [0.34, 0.87], [0.66, 0.87]],
+    8: [[0.3, 0.14], [0.7, 0.14], [0.3, 0.38], [0.7, 0.38], [0.3, 0.62], [0.7, 0.62], [0.3, 0.86], [0.7, 0.86]],
+    9: [[0.25, 0.18], [0.5, 0.18], [0.75, 0.18], [0.25, 0.5], [0.5, 0.5], [0.75, 0.5], [0.25, 0.82], [0.5, 0.82], [0.75, 0.82]]
+  };
+  // 条子点位
+  const STICK_POS = {
+    2: [[0.5, 0.27], [0.5, 0.73]],
+    3: [[0.5, 0.22], [0.32, 0.66], [0.68, 0.66]],
+    4: [[0.32, 0.28], [0.68, 0.28], [0.32, 0.72], [0.68, 0.72]],
+    5: [[0.3, 0.25], [0.7, 0.25], [0.5, 0.5], [0.3, 0.75], [0.7, 0.75]],
+    6: [[0.28, 0.26], [0.5, 0.26], [0.72, 0.26], [0.28, 0.74], [0.5, 0.74], [0.72, 0.74]],
+    7: [[0.5, 0.15], [0.28, 0.56], [0.5, 0.56], [0.72, 0.56], [0.28, 0.88], [0.5, 0.88], [0.72, 0.88]],
+    8: [[0.3, 0.2], [0.5, 0.3], [0.7, 0.2], [0.3, 0.5], [0.7, 0.5], [0.3, 0.8], [0.5, 0.7], [0.7, 0.8]],
+    9: [[0.26, 0.2], [0.5, 0.2], [0.74, 0.2], [0.26, 0.5], [0.5, 0.5], [0.74, 0.5], [0.26, 0.8], [0.5, 0.8], [0.74, 0.8]]
+  };
+
+  // 点位之间的最小间距，用来决定圆点/竹节的尺寸
+  function minSpacing(pos, iw, ih) {
+    let g = Math.min(iw, ih);
+    for (let i = 0; i < pos.length; i++) {
+      for (let j = i + 1; j < pos.length; j++) {
+        const dx = (pos[i][0] - pos[j][0]) * iw;
+        const dy = (pos[i][1] - pos[j][1]) * ih;
+        g = Math.min(g, Math.sqrt(dx * dx + dy * dy));
+      }
+    }
+    return g;
+  }
+
+  function dotColor(n, i) {
+    if (n === 1) return INK_RED;
+    if (n === 3 && i === 1) return INK_RED;
+    if (n === 5 && i === 2) return INK_RED;
+    if (n === 7 && i === 1) return INK_RED;
+    if (n === 9 && i === 4) return INK_RED;
+    if (n === 2 || n === 6) return INK_GREEN;
+    return (i % 2 === 0) ? INK_GREEN : INK_BLUE;
+  }
+
+  // 一个筒子：外圈 + 实心点
+  function drawDot(cx, cy, r, color) {
+    ctx.strokeStyle = color;
+    ctx.lineWidth = Math.max(1, r * 0.34);
+    ctx.beginPath();
+    ctx.arc(cx, cy, r * 0.78, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.fillStyle = color;
+    ctx.beginPath();
+    ctx.arc(cx, cy, r * 0.40, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  // 一根竹（条子）
+  function drawStick(cx, cy, w, h, color) {
+    const x = cx - w / 2, y = cy - h / 2;
+    ctx.fillStyle = color;
+    roundRect(x, y, w, h, Math.min(w / 2, 2.4));
+    ctx.fill();
+    if (h > 9) {
+      ctx.strokeStyle = 'rgba(253,251,243,0.8)';
+      ctx.lineWidth = Math.max(0.8, h * 0.07);
+      ctx.beginPath();
+      ctx.moveTo(x + w * 0.12, cy - h * 0.15); ctx.lineTo(x + w * 0.88, cy - h * 0.15);
+      ctx.moveTo(x + w * 0.12, cy + h * 0.15); ctx.lineTo(x + w * 0.88, cy + h * 0.15);
+      ctx.stroke();
+    }
+  }
+
+  // 一条：一只小雀
+  function drawBird(cx, cy, s) {
+    ctx.save();
+    ctx.translate(cx, cy);
+
+    // 尾羽：左侧三根散开的羽枝
+    ctx.strokeStyle = INK_GREEN;
+    ctx.lineWidth = Math.max(1, s * 0.11);
+    ctx.lineCap = 'round';
+    for (let i = 0; i < 3; i++) {
+      ctx.beginPath();
+      ctx.moveTo(-s * 0.16, s * 0.26);
+      ctx.quadraticCurveTo(-s * (0.52 + i * 0.08), s * (0.42 + i * 0.14), -s * (0.68 + i * 0.10), s * (0.80 + i * 0.12));
+      ctx.stroke();
+    }
+
+    // 身体
+    ctx.fillStyle = INK_GREEN;
+    ctx.beginPath();
+    ctx.ellipse(s * 0.05, s * 0.16, s * 0.36, s * 0.50, -0.18, 0, Math.PI * 2);
+    ctx.fill();
+
+    // 头
+    ctx.beginPath();
+    ctx.arc(s * 0.07, -s * 0.44, s * 0.25, 0, Math.PI * 2);
+    ctx.fill();
+
+    // 眼睛
+    ctx.fillStyle = '#fbf8ef';
+    ctx.beginPath(); ctx.arc(s * 0.13, -s * 0.49, s * 0.065, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = INK;
+    ctx.beginPath(); ctx.arc(s * 0.14, -s * 0.49, s * 0.032, 0, Math.PI * 2); ctx.fill();
+
+    // 嘴
+    ctx.fillStyle = INK_RED;
+    ctx.beginPath();
+    ctx.moveTo(s * 0.27, -s * 0.52);
+    ctx.lineTo(s * 0.52, -s * 0.42);
+    ctx.lineTo(s * 0.27, -s * 0.32);
+    ctx.closePath(); ctx.fill();
+
+    // 翅膀
+    ctx.strokeStyle = 'rgba(251,248,239,0.72)';
+    ctx.lineWidth = Math.max(0.8, s * 0.07);
+    ctx.beginPath();
+    ctx.arc(s * 0.08, s * 0.18, s * 0.24, Math.PI * 0.18, Math.PI * 0.92);
+    ctx.stroke();
+
+    // 脚
+    ctx.strokeStyle = INK_RED;
+    ctx.lineWidth = Math.max(0.8, s * 0.065);
+    ctx.beginPath();
+    ctx.moveTo(s * 0.02, s * 0.62); ctx.lineTo(s * 0.02, s * 0.82);
+    ctx.moveTo(-s * 0.10, s * 0.82); ctx.lineTo(s * 0.14, s * 0.82);
+    ctx.stroke();
+
+    ctx.restore();
   }
 
   // 画一张立牌。vertical=true 表示牌面朝上竖放
@@ -665,39 +900,67 @@
 
     if (!face) return;
 
-    // 牌面文字
+    const suit = T.suitOf(t);
+    const num = T.numOf(t);
+
+    // 底部一点点厚度感，让牌看起来是立体的
+    ctx.fillStyle = 'rgba(120,105,80,0.16)';
+    roundRect(x + 1.4, y + h - h * 0.105, w - 2.8, h * 0.085, 3);
+    ctx.fill();
+
+    // 内区
+    const padX = w * 0.13, padY = h * 0.10;
+    const ix = x + padX, iy = y + padY, iw = w - padX * 2, ih = h - padY * 2;
+
     ctx.save();
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
-    const suit = T.suitOf(t);
-    const isHonor = suit === 'honor';
-    const color = isHonor
-      ? (t === 35 ? '#1f8a4c' : t === 36 ? '#b8352e' : '#26323c')   // 发=绿 中=红
-      : suit === 'wan' ? '#b8352e' : suit === 'tiao' ? '#1f8a4c' : '#26527e';
-    ctx.fillStyle = color;
 
-    const num = T.numOf(t);
-    if (isHonor) {
-      ctx.font = '700 ' + Math.round(w * 0.62) + 'px "PingFang SC","Microsoft YaHei",serif';
-      ctx.fillText(HONOR_CN[HONORS[t - 31]], x + w / 2, y + h / 2 + 1);
+    if (suit === 'honor') {
+      const glyph = TILE_GLYPH[HONORS[t - 31]] || '?';
+      if (glyph === '白') {
+        // 白板：空心双框
+        ctx.strokeStyle = INK_BLUE;
+        ctx.lineWidth = Math.max(1.2, w * 0.05);
+        roundRect(x + w * 0.20, y + h * 0.15, w * 0.60, h * 0.70, w * 0.07);
+        ctx.stroke();
+        ctx.strokeStyle = 'rgba(42,85,128,0.42)';
+        ctx.lineWidth = Math.max(0.8, w * 0.022);
+        roundRect(x + w * 0.27, y + h * 0.23, w * 0.46, h * 0.54, w * 0.05);
+        ctx.stroke();
+      } else {
+        ctx.fillStyle = glyph === '中' ? INK_RED : (glyph === '發' ? INK_GREEN : INK);
+        ctx.font = '700 ' + Math.round(w * 0.76) + 'px "PingFang SC","Microsoft YaHei","SimSun",serif';
+        ctx.fillText(glyph, x + w / 2, y + h / 2 + h * 0.015);
+      }
     } else if (suit === 'wan') {
-      // 数字 + 万
-      ctx.font = '700 ' + Math.round(w * 0.52) + 'px "PingFang SC","Microsoft YaHei",serif';
-      ctx.fillText(NUM_CN[num], x + w / 2, y + h * 0.36);
-      ctx.font = '700 ' + Math.round(w * 0.42) + 'px "PingFang SC","Microsoft YaHei",serif';
-      ctx.fillText('万', x + w / 2, y + h * 0.72);
+      // 汉字数字 + 红「萬」（跟真牌一样：上数字下萬）
+      ctx.fillStyle = INK;
+      ctx.font = '700 ' + Math.round(w * 0.46) + 'px "PingFang SC","Microsoft YaHei","SimSun",serif';
+      ctx.fillText(NUM_CN[num], x + w / 2, y + h * 0.31);
+      ctx.fillStyle = INK_RED;
+      ctx.font = '700 ' + Math.round(w * 0.44) + 'px "PingFang SC","Microsoft YaHei","SimSun",serif';
+      ctx.fillText('萬', x + w / 2, y + h * 0.71);
+    } else if (suit === 'tong') {
+      const pos = PIP_POS[num] || [];
+      const gap = minSpacing(pos, iw, ih);
+      const r = Math.max(1.6, Math.min(gap * 0.42, ih * 0.17)) * (num === 1 ? 1.35 : 1);
+      for (let i = 0; i < pos.length; i++) {
+        drawDot(ix + pos[i][0] * iw, iy + pos[i][1] * ih, r, dotColor(num, i));
+      }
     } else {
-      // 条/筒：数字 + 花色字
-      ctx.font = '700 ' + Math.round(w * 0.50) + 'px "PingFang SC","Microsoft YaHei",serif';
-      ctx.fillText(String(num), x + w / 2, y + h * 0.36);
-      ctx.font = '700 ' + Math.round(w * 0.34) + 'px "PingFang SC","Microsoft YaHei",serif';
-      ctx.fillText(SUIT_CN[suit], x + w / 2, y + h * 0.72);
-      // 条子加一点绿色点缀
-      if (suit === 'tiao') {
-        ctx.fillStyle = 'rgba(31,138,76,0.25)';
-        ctx.beginPath();
-        ctx.arc(x + w / 2, y + h * 0.27, w * 0.10, 0, Math.PI * 2);
-        ctx.fill();
+      // 条子
+      if (num === 1) {
+        drawBird(x + w / 2, y + h / 2, Math.min(w, h) * 0.29);
+      } else {
+        const pos = STICK_POS[num] || [];
+        const gap = minSpacing(pos, iw, ih);
+        const sh = Math.max(5, Math.min(gap * 1.12, ih * 0.30));
+        const sw = Math.max(2.2, sh * 0.44);
+        for (let i = 0; i < pos.length; i++) {
+          const red = (num === 5 && i === 2) || (num === 7 && i === 0) || (num === 9 && i === 4);
+          drawStick(ix + pos[i][0] * iw, iy + pos[i][1] * ih, sw, sh, red ? INK_RED : INK_GREEN);
+        }
       }
     }
 
@@ -757,6 +1020,178 @@
   let handHit = [];      // [{x,y,w,h,tile,index}]
   let buttonHit = [];    // [{x,y,w,h,action,label}]
 
+  /* ---- 全屏与静音按钮 ---- */
+
+  function fsElement() {
+    return document.fullscreenElement || document.webkitFullscreenElement ||
+      document.msFullscreenElement || null;
+  }
+  function fsSupported() {
+    const el = document.documentElement || {};
+    return !!(el.requestFullscreen || el.webkitRequestFullscreen || el.msRequestFullscreen);
+  }
+  function enterFullscreen() {
+    if (fsElement()) return;
+    const el = document.documentElement;
+    try {
+      const fn = el.requestFullscreen || el.webkitRequestFullscreen || el.msRequestFullscreen;
+      if (fn) { const r = fn.call(el); if (r && r.catch) r.catch(function () { /* 用户拒绝或不允许 */ }); }
+      // 手机上顺便尝试锁横屏（不支持 / 被拒绝都不影响游戏）
+      if (typeof screen !== 'undefined' && screen && screen.orientation && screen.orientation.lock) {
+        const lr = screen.orientation.lock('landscape');
+        if (lr && lr.catch) lr.catch(function () { /* 忽略 */ });
+      }
+    } catch (e) { /* 忽略 */ }
+  }
+  function exitFullscreen() {
+    try {
+      const fn = document.exitFullscreen || document.webkitExitFullscreen || document.msExitFullscreen;
+      if (fn && fsElement()) {
+        const r = fn.call(document);
+        if (r && r.catch) r.catch(function () { /* 忽略 */ });
+      }
+    } catch (e) { /* 忽略 */ }
+  }
+  function toggleFullscreen() { if (fsElement()) exitFullscreen(); else enterFullscreen(); }
+
+  function drawSysCircle(cx, cy, r, active) {
+    ctx.save();
+    ctx.beginPath(); ctx.arc(cx, cy, r, 0, Math.PI * 2);
+    ctx.fillStyle = active ? 'rgba(232,196,106,0.22)' : 'rgba(255,255,255,0.10)';
+    ctx.fill();
+    ctx.strokeStyle = active ? 'rgba(232,196,106,0.78)' : 'rgba(255,255,255,0.24)';
+    ctx.lineWidth = 1.4;
+    ctx.stroke();
+    ctx.restore();
+  }
+
+  // 全屏图标：展开（四角括号朝内）/ 收拢（括号内移、臂朝外）
+  function drawFsIcon(cx, cy, inFs) {
+    ctx.save();
+    ctx.strokeStyle = 'rgba(238,248,238,0.95)';
+    ctx.lineWidth = 2.2;
+    ctx.lineCap = 'round';
+    ctx.lineJoin = 'round';
+    const o = 8, a = 6.5;
+    for (const sx of [-1, 1]) {
+      for (const sy of [-1, 1]) {
+        const vx = cx + sx * (inFs ? o - a : o);
+        const vy = cy + sy * (inFs ? o - a : o);
+        const dx = inFs ? sx * a : -sx * a;
+        const dy = inFs ? sy * a : -sy * a;
+        ctx.beginPath();
+        ctx.moveTo(vx + dx, vy);
+        ctx.lineTo(vx, vy);
+        ctx.lineTo(vx, vy + dy);
+        ctx.stroke();
+      }
+    }
+    ctx.restore();
+  }
+
+  function drawMuteIcon(cx, cy, isMuted) {
+    ctx.save();
+    ctx.fillStyle = 'rgba(238,248,238,0.92)';
+    ctx.beginPath();
+    ctx.moveTo(cx - 7, cy - 3);
+    ctx.lineTo(cx - 3, cy - 3);
+    ctx.lineTo(cx + 1.5, cy - 7);
+    ctx.lineTo(cx + 1.5, cy + 7);
+    ctx.lineTo(cx - 3, cy + 3);
+    ctx.lineTo(cx - 7, cy + 3);
+    ctx.closePath();
+    ctx.fill();
+    ctx.lineWidth = 1.8;
+    ctx.lineCap = 'round';
+    if (isMuted) {
+      ctx.strokeStyle = 'rgba(255,150,140,0.95)';
+      ctx.beginPath();
+      ctx.moveTo(cx - 5, cy - 8);
+      ctx.lineTo(cx + 9, cy + 8);
+      ctx.stroke();
+    } else {
+      ctx.strokeStyle = 'rgba(238,248,238,0.92)';
+      ctx.beginPath(); ctx.arc(cx + 2, cy, 5.5, -0.9, 0.9); ctx.stroke();
+      ctx.beginPath(); ctx.arc(cx + 2, cy, 9, -0.85, 0.85); ctx.stroke();
+    }
+    ctx.restore();
+  }
+
+  // 右上角的系统按钮（全屏 / 静音），任何界面都可见
+  function drawSystemButtons() {
+    const r = 20, y = 46;
+    const mx = VW - 46;
+    drawSysCircle(mx, y, r, false);
+    drawMuteIcon(mx, y, muted);
+    buttonHit.push({ x: mx - r, y: y - r, w: r * 2, h: r * 2, action: 'mute' });
+
+    if (fsSupported()) {
+      const fx = VW - 100;
+      const inFs = !!fsElement();
+      drawSysCircle(fx, y, r, inFs);
+      drawFsIcon(fx, y, inFs);
+      buttonHit.push({ x: fx - r, y: y - r, w: r * 2, h: r * 2, action: 'fullscreen' });
+    }
+  }
+
+  // 桌面图案：交叉斜纹 + 中央回纹环 + 四角纹样（很淡，不抢牌面）
+  function drawFeltPattern() {
+    ctx.save();
+    roundRect(26, 26, VW - 52, VH - 52, 25);
+    ctx.clip();
+
+    // 交叉斜纹
+    ctx.strokeStyle = 'rgba(226,244,230,0.030)';
+    ctx.lineWidth = 1;
+    for (let i = -VH; i < VW + VH; i += 38) {
+      ctx.beginPath(); ctx.moveTo(i, 26); ctx.lineTo(i + VH, VH - 26); ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(i, VH - 26); ctx.lineTo(i + VH, 26); ctx.stroke();
+    }
+
+    const cx = VW / 2, cy = VH * 0.47;
+    // 中央回纹环
+    ctx.strokeStyle = 'rgba(232,196,106,0.060)';
+    ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.arc(cx, cy, 172, 0, Math.PI * 2); ctx.stroke();
+    ctx.lineWidth = 1;
+    ctx.beginPath(); ctx.arc(cx, cy, 156, 0, Math.PI * 2); ctx.stroke();
+    // 环上的小方点
+    ctx.fillStyle = 'rgba(232,196,106,0.050)';
+    for (let i = 0; i < 24; i++) {
+      const a = (i / 24) * Math.PI * 2;
+      ctx.save();
+      ctx.translate(cx + Math.cos(a) * 164, cy + Math.sin(a) * 164);
+      ctx.rotate(a);
+      ctx.fillRect(-4, -4, 8, 8);
+      ctx.restore();
+    }
+    // 内圈方框（回纹感）
+    ctx.strokeStyle = 'rgba(232,196,106,0.045)';
+    ctx.lineWidth = 1.5;
+    roundRect(cx - 112, cy - 112, 224, 224, 8); ctx.stroke();
+    roundRect(cx - 96, cy - 96, 192, 192, 6); ctx.stroke();
+
+    // 四角纹样
+    ctx.strokeStyle = 'rgba(232,196,106,0.075)';
+    ctx.lineWidth = 2;
+    const cs = [[68, 68, 1, 1], [VW - 68, 68, -1, 1], [68, VH - 68, 1, -1], [VW - 68, VH - 68, -1, -1]];
+    for (const c of cs) {
+      const px = c[0], py = c[1], sx = c[2], sy = c[3];
+      ctx.beginPath();
+      ctx.moveTo(px, py + sy * 34);
+      ctx.lineTo(px, py);
+      ctx.lineTo(px + sx * 34, py);
+      ctx.stroke();
+      ctx.beginPath();
+      ctx.moveTo(px + sx * 8, py + sy * 24);
+      ctx.lineTo(px + sx * 8, py + sy * 8);
+      ctx.lineTo(px + sx * 24, py + sy * 8);
+      ctx.stroke();
+    }
+
+    ctx.restore();
+  }
+
   function render() {
     applyTransform();
     ctx.fillStyle = '#0b1d13';
@@ -774,15 +1209,22 @@
     roundRect(24, 24, VW - 48, VH - 48, 26);
     ctx.stroke();
 
+    // 桌面图案
+    drawFeltPattern();
+
     // 右下角极淡的构建标记
     drawText('build ' + BUILD, VW - 16, VH - 13, 10, 'rgba(200,220,208,0.30)', 'right');
 
     handHit = [];
     buttonHit = [];
 
-    if (G.phase === 'title') { renderTitle(); return; }
-    renderTable();
-    if (G.phase === 'over') renderOver();
+    if (G.phase === 'title') {
+      renderTitle();
+    } else {
+      renderTable();
+      if (G.phase === 'over') renderOver();
+    }
+    drawSystemButtons();
   }
 
   function renderTitle() {
@@ -790,8 +1232,8 @@
     drawText('四组合一对，即可胡牌', VW / 2, VH * 0.40, 22, 'rgba(232,196,106,0.9)', 'center', '500');
 
     const cx = VW / 2;
-    drawText('玩法：与三个电脑对局 · 鼠标或手指点击出牌', cx, VH * 0.52, 17, 'rgba(200,220,208,0.75)', 'center');
-    drawText('碰 / 杠 / 胡 会在可操作时自动出现按钮', cx, VH * 0.58, 17, 'rgba(200,220,208,0.75)', 'center');
+    drawText('玩法：与三个电脑对局 · 点手牌出牌 · 碰 / 杠 / 胡会自动出现按钮', cx, VH * 0.52, 17, 'rgba(200,220,208,0.75)', 'center');
+    drawText('本玩法不含「吃」 · 手机可全屏玩 · 右上角可开关声音', cx, VH * 0.585, 17, 'rgba(200,220,208,0.75)', 'center');
     drawText('目标：凑齐四组面子（顺子或刻子）+ 一对将', cx, VH * 0.66, 16, 'rgba(200,220,208,0.55)', 'center');
 
     const bw = 200, bh = 58;
@@ -834,27 +1276,12 @@
     const th = vertical ? TW * 0.62 : TH * 0.62;
     const gap = 3;
 
-    // 名字与牌数
-    const active = (G.turn === p && G.phase === 'playing');
-    ctx.save();
-    ctx.fillStyle = active ? 'rgba(232,196,106,0.18)' : 'rgba(255,255,255,0.06)';
-    const nx = vertical ? cx - 44 : cx - 62;
-    const ny = vertical ? cy - 150 : cy - 26;
-    roundRect(nx, ny, vertical ? 88 : 124, 24, 12);
-    ctx.fill();
-    ctx.restore();
-    drawText(SEAT_NAMES[p] + (active ? ' ●' : ''), vertical ? cx : cx, ny + 12, 14,
-      active ? '#ffdf95' : 'rgba(220,235,225,0.8)', 'center', '600');
-
-    // 手牌：正面朝上的自己的牌不显示，这里画牌背
+    // 手牌（先画牌背，名字牌稍后画在上层，避免被牌挡掉——之前左右两家的名字就是这么消失的）
     const n = pl.hand.length;
     const totalW = n * (tw + gap) - gap;
     if (side === 'top') {
       let x = cx - totalW / 2;
       for (let i = 0; i < n; i++) { drawTileBack(x, cy, tw, th); x += tw + gap; }
-    } else if (side === 'left') {
-      let y = cy - totalW / 2;
-      for (let i = 0; i < n; i++) { drawTileBack(cx - th / 2, y, th, tw); y += tw + gap; }
     } else {
       let y = cy - totalW / 2;
       for (let i = 0; i < n; i++) { drawTileBack(cx - th / 2, y, th, tw); y += tw + gap; }
@@ -862,6 +1289,22 @@
 
     // 副露（正面朝上，让大家看到）
     drawOpponentMelds(p, cx, cy, side, tw, th);
+
+    // 名字与牌数：左右两家放到各自牌列的下方（上方是信息栏和系统按钮，会撞）
+    const active = (G.turn === p && G.phase === 'playing');
+    const ny = side === 'top' ? cy - 26 : cy + totalW / 2 + 6;
+    const nx = cx - (vertical ? 44 : 62);
+    ctx.save();
+    ctx.fillStyle = active ? 'rgba(232,196,106,0.20)' : 'rgba(8,26,18,0.55)';
+    roundRect(nx, ny, vertical ? 88 : 124, 24, 12);
+    ctx.fill();
+    ctx.strokeStyle = active ? 'rgba(232,196,106,0.6)' : 'rgba(255,255,255,0.14)';
+    ctx.lineWidth = 1;
+    roundRect(nx, ny, vertical ? 88 : 124, 24, 12);
+    ctx.stroke();
+    ctx.restore();
+    drawText(SEAT_NAMES[p] + (active ? ' · 出牌中' : ' · ' + n + ' 张'),
+      cx, ny + 12, 14, active ? '#ffdf95' : 'rgba(224,238,228,0.9)', 'center', '600');
   }
 
   function drawOpponentMelds(p, cx, cy, side, tw, th) {
@@ -990,7 +1433,9 @@
   function drawActionButtons() {
     if (G.phase !== 'playing') return;
     const pl = G.players[0];
-    const bw = 96, bh = 46, gap = 14;
+    // 触屏设备按钮做大一点，方便点
+    const touchUI = isTouchDevice();
+    const bw = touchUI ? 118 : 96, bh = touchUI ? 56 : 46, gap = 14;
     const y = VH - TH - 108;
 
     const acts = [];
@@ -999,7 +1444,6 @@
       if (claim.options.includes('hu')) acts.push({ a: 'hu', label: '胡', hot: true });
       if (claim.options.includes('kan')) acts.push({ a: 'kan', label: '杠', hot: false });
       if (claim.options.includes('pon')) acts.push({ a: 'pon', label: '碰', hot: false });
-      if (claim.options.includes('chi')) acts.push({ a: 'chi', label: '吃', hot: false });
       acts.push({ a: 'pass', label: '过', hot: false });
     } else if (G.turn === 0 && G.waitingFor === 'discard') {
       // 自摸胡牌机会
@@ -1094,12 +1538,17 @@
   }
 
   function doAction(a) {
+    if (a === 'mute') { toggleMute(); return; }
+    if (a === 'fullscreen') { toggleFullscreen(); markDirty(); return; }
     if (a === 'start' || a === 'restart') {
+      sfxTap();
+      // 手机上顺手进全屏（由用户点击触发，符合浏览器要求）
+      if (isTouchDevice() && !fsElement()) enterFullscreen();
       resetGame();
       recomputeTenpai();
       return;
     }
-    if (a === 'pass') { passClaim(); return; }
+    if (a === 'pass') { sfxTap(); passClaim(); return; }
     if (a === 'tsumo') {
       declareWin(0, G.players[0].drawn, 0, true);
       return;
@@ -1131,22 +1580,6 @@
       recomputeTenpai();
       return;
     }
-    if (a === 'chi') {
-      // 选一个组合：优先中间张，保持手牌整齐
-      const t = claim.tile, n = T.numOf(t), base = t - n;
-      const has = (k) => pl.hand.includes(base + k);
-      let combo = null;
-      if (n >= 2 && n <= 8 && has(n - 1) && has(n + 1)) combo = [base + n - 1, base + n + 1];
-      else if (n >= 3 && has(n - 2) && has(n - 1)) combo = [base + n - 2, base + n - 1];
-      else if (n <= 7 && has(n + 1) && has(n + 2)) combo = [base + n + 1, base + n + 2];
-      else if (n >= 3 && has(n - 1) && has(n + 1)) combo = [base + n - 1, base + n + 1];
-      if (!combo) combo = [];
-      G.pendingClaim = null;
-      applyChi(0, t, claim.from, combo);
-      G.waitingFor = 'discard';
-      recomputeTenpai();
-      return;
-    }
   }
 
   function passClaim() {
@@ -1166,6 +1599,23 @@
     e.preventDefault();
     onTap(e.clientX, e.clientY);
   }, { passive: false });
+
+  // 键盘快捷键：M 静音、F 全屏、空格/回车开始或再来一局
+  window.addEventListener('keydown', function (e) {
+    const k = (e.key || '').toLowerCase();
+    if (k === 'm') { toggleMute(); }
+    else if (k === 'f') { toggleFullscreen(); markDirty(); }
+    else if (k === ' ' || k === 'enter') {
+      if (G.phase === 'title') doAction('start');
+      else if (G.phase === 'over') doAction('restart');
+      markDirty();
+    }
+  });
+
+  // 全屏状态变化时重画按钮图标
+  ['fullscreenchange', 'webkitfullscreenchange', 'msfullscreenchange'].forEach(function (ev) {
+    document.addEventListener(ev, function () { markDirty(); });
+  });
 
   window.addEventListener('resize', fit);
   window.addEventListener('orientationchange', function () { setTimeout(fit, 60); });
@@ -1271,7 +1721,14 @@
     T: T,
     start: function () { resetGame(); recomputeTenpai(); },
     discard: function (t) { playerDiscard(t); },
-    action: function (a) { doAction(a); }
+    action: function (a) { doAction(a); },
+    // 测试钩子：真跑一遍所有音效（异常会抛出，交给测试断言）
+    sfxAll: function () {
+      [sfxTap, sfxDiscard, sfxDrawTile, sfxPon, sfxKan, sfxHu, sfxOtherWin, sfxFlow]
+        .forEach(function (f) { f(); });
+    },
+    fsSupported: fsSupported,
+    toggleFullscreen: toggleFullscreen
   };
 
   // 自动化测试钩子：允许在加载前预置 __MJ_AUTOSTART / __MJ_AUTOPLAY
