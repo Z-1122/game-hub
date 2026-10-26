@@ -404,14 +404,17 @@
   const BTN = {
     summon: { x: W - 96, y: H - 96, r: 52, label: '回声' },
     dash: { x: W - 196, y: H - 62, r: 38, label: '冲刺' },
-    full: { x: W - 46, y: 104, r: 22, label: '全屏' }
+    full: { x: W - 44, y: 104, r: 21, label: '全屏' },
+    pause: { x: W - 44, y: 152, r: 21, label: '暂停' },
+    mute: { x: W - 44, y: 200, r: 21, label: '静音' }
   };
-  const btnPulse = { summon: 0, dash: 0, full: 0 };  // 按下反馈动画
+  const btnPulse = { summon: 0, dash: 0, full: 0, pause: 0, mute: 0 };  // 按下反馈动画
 
   let isTouch = false;      // 是否检测到触屏设备
   let touchHintT = 0;       // 触屏操作提示的显示计时
   let isFullscreen = false; // 是否处于全屏
   let fsBlocked = false;    // 浏览器拒绝/不支持全屏时置位
+  let fsGuardUntil = 0;     // 全屏切换后的 blur 保护期（毫秒时间戳）
 
   const echoes = [];
   const bullets = [];
@@ -818,6 +821,8 @@
     if (btnPulse.summon > 0) btnPulse.summon = Math.max(0, btnPulse.summon - dt * 4);
     if (btnPulse.dash > 0) btnPulse.dash = Math.max(0, btnPulse.dash - dt * 4);
     if (btnPulse.full > 0) btnPulse.full = Math.max(0, btnPulse.full - dt * 4);
+    if (btnPulse.pause > 0) btnPulse.pause = Math.max(0, btnPulse.pause - dt * 4);
+    if (btnPulse.mute > 0) btnPulse.mute = Math.max(0, btnPulse.mute - dt * 4);
     if (touchHintT > 0) touchHintT = Math.max(0, touchHintT - dt);
     if (announce) {
       announce.life -= dt;
@@ -1334,6 +1339,76 @@
       ctx.stroke();
       ctx.lineCap = 'butt';
     }
+
+    // 暂停按钮
+    (function () {
+      const b = BTN.pause;
+      const pu = btnPulse.pause;
+      const r = b.r * (1 + pu * 0.12);
+      glow(SPR.cyan, b.x, b.y, r * 1.7, 0.14 + pu * 0.2);
+      ctx.beginPath();
+      ctx.arc(b.x, b.y, r, 0, TAU);
+      ctx.fillStyle = 'rgba(10,20,34,0.55)';
+      ctx.fill();
+      ctx.strokeStyle = 'rgba(150,215,245,' + (0.42 + pu * 0.3) + ')';
+      ctx.lineWidth = 1.6;
+      ctx.stroke();
+      // 两条竖线 = 暂停
+      ctx.strokeStyle = 'rgba(190,240,255,0.85)';
+      ctx.lineWidth = 2.6;
+      ctx.lineCap = 'round';
+      ctx.beginPath();
+      ctx.moveTo(b.x - 4, b.y - 7); ctx.lineTo(b.x - 4, b.y + 7);
+      ctx.moveTo(b.x + 4, b.y - 7); ctx.lineTo(b.x + 4, b.y + 7);
+      ctx.stroke();
+      ctx.lineCap = 'butt';
+    })();
+
+    // 静音按钮
+    (function () {
+      const b = BTN.mute;
+      const pu = btnPulse.mute;
+      const r = b.r * (1 + pu * 0.12);
+      glow(SPR.cyan, b.x, b.y, r * 1.7, 0.14 + pu * 0.2);
+      ctx.beginPath();
+      ctx.arc(b.x, b.y, r, 0, TAU);
+      ctx.fillStyle = 'rgba(10,20,34,0.55)';
+      ctx.fill();
+      ctx.strokeStyle = 'rgba(150,215,245,' + (0.42 + pu * 0.3) + ')';
+      ctx.lineWidth = 1.6;
+      ctx.stroke();
+
+      // 喇叭：小方块 + 三角
+      ctx.fillStyle = 'rgba(190,240,255,0.85)';
+      ctx.fillRect(b.x - 7, b.y - 2.5, 4, 5);
+      ctx.beginPath();
+      ctx.moveTo(b.x - 3, b.y - 6);
+      ctx.lineTo(b.x + 2.5, b.y - 9.5);
+      ctx.lineTo(b.x + 2.5, b.y + 9.5);
+      ctx.lineTo(b.x - 3, b.y + 6);
+      ctx.closePath();
+      ctx.fill();
+
+      ctx.strokeStyle = 'rgba(190,240,255,0.85)';
+      ctx.lineWidth = 1.6;
+      ctx.lineCap = 'round';
+      if (muted) {
+        // 静音：画一道斜杠
+        ctx.beginPath();
+        ctx.moveTo(b.x - 9, b.y + 9);
+        ctx.lineTo(b.x + 10, b.y - 9);
+        ctx.stroke();
+      } else {
+        // 有声：两道弧
+        ctx.beginPath();
+        ctx.arc(b.x + 2, b.y, 6, -Math.PI / 3, Math.PI / 3);
+        ctx.stroke();
+        ctx.beginPath();
+        ctx.arc(b.x + 2, b.y, 9.5, -Math.PI / 3, Math.PI / 3);
+        ctx.stroke();
+      }
+      ctx.lineCap = 'butt';
+    })();
   }
 
   function drawAnnounce() {
@@ -1467,7 +1542,7 @@
     ctx.fillText('已暂停', W / 2, H / 2 - 6);
     ctx.fillStyle = 'rgba(170,210,235,0.6)';
     ctx.font = '500 14px ' + FONT;
-    ctx.fillText('按 P 继续', W / 2, H / 2 + 34);
+    ctx.fillText(isTouch ? '轻触屏幕继续' : '按 P 或 点击画面 继续', W / 2, H / 2 + 34);
   }
 
   function render() {
@@ -1483,9 +1558,14 @@
 
     if (state === 'playing') {
       drawHUD();
-      drawTouchUI();
-      if (announce) drawAnnounce();
-      if (paused) drawPaused();
+      if (paused) {
+        // 暂停：遮罩盖住战场，但把按钮组画在上层，手机仍能点「继续/全屏/静音」
+        drawPaused();
+        drawTouchUI();
+      } else {
+        drawTouchUI();
+        if (announce) drawAnnounce();
+      }
     } else if (state === 'title') {
       drawTitle();
     } else if (state === 'over') {
@@ -1501,8 +1581,7 @@
     if (e.repeat) return;
 
     if (e.code === 'KeyM') {
-      muted = !muted;
-      if (master) master.gain.value = muted ? 0 : 0.3;
+      toggleMute();
       return;
     }
 
@@ -1531,6 +1610,11 @@
     keys.clear();
     touch.active = false;
     touch.mag = 0;
+    // 触屏设备不因 blur 暂停：切换全屏/切后台在手机上很常见，
+    // 而且手机没有 P 键，一旦暂停就出不来了。
+    if (isTouch) return;
+    // 全屏进出会触发 blur，保护期内忽略
+    if (fsGuardUntil > performance.now()) return;
     if (state === 'playing') paused = true;
   });
 
@@ -1567,26 +1651,59 @@
     return dx * dx + dy * dy <= r * r;
   }
 
+  // 静音开关：键盘 M 与触屏按钮共用
+  function toggleMute() {
+    muted = !muted;
+    if (master) master.gain.value = muted ? 0 : 0.3;
+    return muted;
+  }
+
   function onPointerDown(e) {
     initAudio();
     refreshRect();
     const p = toLogical(e.clientX, e.clientY);
 
     if (state === 'title' || state === 'over') {
+      // 先开局，再进全屏：反过来的话全屏引发的 blur 会落到新一局上
+      startGame();
+      touchHintT = 5;
       // 手机横屏时，趁这次用户手势直接进全屏（浏览器只允许手势内请求）
       if (isTouch && isLandscapeNow() && !fsBlocked && !fsElement()) {
         enterFullscreen();
       }
-      startGame();
-      touchHintT = 5;
       return;
     }
-    if (state !== 'playing' || paused) return;
+
+    // 暂停时：轻触任意处继续（手机没有 P 键，必须能靠点屏幕恢复）
+    if (state === 'playing' && paused) {
+      // 暂停状态下仍允许点右上角按钮
+      if (fsSupported() && hitBtn(p, BTN.full)) { btnPulse.full = 1; toggleFullscreen(); }
+      else if (hitBtn(p, BTN.mute)) { btnPulse.mute = 1; toggleMute(); }
+      else if (hitBtn(p, BTN.pause)) { btnPulse.pause = 1; /* 已经是暂停，保持不动 */ }
+      else {
+        paused = false;
+        beep(660, 0.12, 'sine', 0.1, 880);
+      }
+      e.preventDefault();
+      return;
+    }
+
+    if (state !== 'playing') return;
 
     // 先判断按钮
     if (fsSupported() && hitBtn(p, BTN.full)) {
       btnPulse.full = 1;
       toggleFullscreen();
+      return;
+    }
+    if (hitBtn(p, BTN.pause)) {
+      btnPulse.pause = 1;
+      paused = true;
+      return;
+    }
+    if (hitBtn(p, BTN.mute)) {
+      btnPulse.mute = 1;
+      toggleMute();
       return;
     }
     if (hitBtn(p, BTN.summon)) {
@@ -1741,6 +1858,8 @@
   function onFsChange() {
     isFullscreen = !!fsElement();
     document.body.classList.toggle('fullscreen-mode', isFullscreen);
+    // 进出全屏通常伴随一次 blur，这里给 1.5 秒保护期避免误暂停
+    fsGuardUntil = performance.now() + 1500;
     fit();
   }
 
