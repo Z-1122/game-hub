@@ -33,11 +33,13 @@ function ctxStub() {
 }
 
 // —— AudioContext 桩：让音效合成真的跑一遍，验证没有 API 误用 ——
-const audioStats = { osc: 0, gain: 0, buf: 0, src: 0, filter: 0 };
-function fakeParam() {
+const audioStats = { osc: 0, gain: 0, buf: 0, src: 0, filter: 0, comp: 0, conv: 0, events: [] };
+// AudioParam 假件：可选 recorder 用来记录「这个参数被设成了什么值」
+function fakeParam(rec) {
   return {
     value: 0,
-    setValueAtTime() {}, exponentialRampToValueAtTime() {}, linearRampToValueAtTime() {}
+    setValueAtTime(v, t) { if (rec) rec(v, t); },
+    exponentialRampToValueAtTime() {}, linearRampToValueAtTime() {}
   };
 }
 function fakeAudioContext() {
@@ -49,7 +51,18 @@ function fakeAudioContext() {
 fakeAudioContext.prototype.resume = function () {};
 fakeAudioContext.prototype.createOscillator = function () {
   audioStats.osc++;
-  return { type: 'sine', frequency: fakeParam(), connect() {}, start() {}, stop() {} };
+  const ev = { f: 0, type: 'sine', t: 0 };
+  audioStats.events.push(ev);
+  const o = {
+    frequency: fakeParam((v, t) => { ev.f = v; if (t !== undefined) ev.t = t; }),
+    connect() {}, start(t) { if (t !== undefined) ev.t = t; }, stop() {}
+  };
+  let ty = 'sine';
+  Object.defineProperty(o, 'type', {
+    get() { return ty; },
+    set(v) { ty = v; ev.type = v; }
+  });
+  return o;
 };
 fakeAudioContext.prototype.createGain = function () {
   audioStats.gain++;
@@ -65,7 +78,18 @@ fakeAudioContext.prototype.createBufferSource = function () {
 };
 fakeAudioContext.prototype.createBiquadFilter = function () {
   audioStats.filter++;
-  return { type: 'lowpass', frequency: { value: 0 }, Q: { value: 0 }, connect() {} };
+  return { type: 'lowpass', frequency: fakeParam(), Q: fakeParam(), connect() {} };
+};
+fakeAudioContext.prototype.createDynamicsCompressor = function () {
+  audioStats.comp++;
+  return {
+    threshold: fakeParam(), knee: fakeParam(), ratio: fakeParam(),
+    attack: fakeParam(), release: fakeParam(), connect() {}
+  };
+};
+fakeAudioContext.prototype.createConvolver = function () {
+  audioStats.conv++;
+  return { buffer: null, connect() {} };
 };
 
 const sandbox = {
@@ -301,6 +325,33 @@ try {
 ok(audioStats.osc > oscBefore, '音效真的创建了振荡器', 'osc +' + (audioStats.osc - oscBefore));
 ok(audioStats.buf > bufBefore, '噪声脉冲创建了 AudioBuffer', 'buf +' + (audioStats.buf - bufBefore));
 ok(audioStats.gain > 0 && audioStats.filter > 0, '增益与滤波节点都被使用');
+ok(audioStats.comp > 0 && audioStats.conv > 0, '总线用上了压限与混响（更好听的关键）');
+
+// 三种出牌音必须真的不一样：分别单独跑，比较节点数与音高范围
+function soundProfile(name) {
+  const before = {
+    osc: audioStats.osc, buf: audioStats.buf, filter: audioStats.filter, n: audioStats.events.length
+  };
+  dbg.sfxOne(name);
+  const freq = audioStats.events.slice(before.n).map((e) => e.f).filter((f) => f > 0);
+  return {
+    osc: audioStats.osc - before.osc,
+    buf: audioStats.buf - before.buf,
+    filter: audioStats.filter - before.filter,
+    lo: freq.length ? Math.min.apply(null, freq) : 0,
+    hi: freq.length ? Math.max.apply(null, freq) : 0
+  };
+}
+const sigText = (s) => 'osc=' + s.osc + ' buf=' + s.buf + ' 低=' + Math.round(s.lo) + ' 高=' + Math.round(s.hi);
+const differs = (a, b) => a.osc !== b.osc || a.buf !== b.buf || a.lo !== b.lo || a.hi !== b.hi;
+const sigDiscard = soundProfile('discard');
+const sigPon = soundProfile('pon');
+const sigKan = soundProfile('kan');
+ok(sigDiscard.osc > 0 && sigDiscard.buf > 0, '普通出牌有声（磕桌 + 木头共鸣）', sigText(sigDiscard));
+ok(differs(sigDiscard, sigPon), '出牌与碰的声音不同', sigText(sigDiscard) + ' 对比 ' + sigText(sigPon));
+ok(differs(sigPon, sigKan), '碰与杠的声音不同', sigText(sigPon) + ' 对比 ' + sigText(sigKan));
+ok(sigKan.osc > sigPon.osc && sigKan.lo < 200, '杠比碰更重更低（四张牌 + 低音锣）',
+  sigText(sigKan) + ' 对比 ' + sigText(sigPon));
 try {
   ok(dbg.fsSupported() === false, '无全屏 API 的环境下 fsSupported 返回 false（不画全屏按钮）');
   dbg.toggleFullscreen();
@@ -320,9 +371,83 @@ ok(/PIP_POS/.test(script) && /STICK_POS/.test(script) && /TILE_GLYPH/.test(scrip
   '筒/条/字牌的排布表与字形表齐全');
 ok(/function sfxPon/.test(script) && /function sfxKan/.test(script) && /function sfxDiscard/.test(script),
   '碰 / 杠 / 出牌音效函数齐全');
+ok(/function clack/.test(script) && /function buildBus/.test(script),
+  '磕桌合成器与音频总线（压限 + 混响）存在');
+ok(/const SFX = \{/.test(script) && /sfxOne/.test(script), '音效名表与单音测试钩子存在');
+ok(/createDynamicsCompressor/.test(script) && /createConvolver/.test(script),
+  '源码里真的用了压限器与卷积混响');
 ok(/requestFullscreen/.test(script) && /action: 'fullscreen'/.test(script), '全屏按钮与全屏 API 齐全');
 ok(/function drawSystemButtons/.test(script), '右上角系统按钮绘制函数存在');
 ok(/本玩法不含「吃」/.test(script), '标题页写明了本玩法不含「吃」');
+
+/* ---------------- 9. 版面自检 ----------------
+ * 牌面放大后（TW 56 × TH 76）最容易出的事就是各方块互相压住或跑出画布。
+ * 这里把 render() 真正画出来的方块拿出来做几何断言，不靠肉眼。 */
+console.log('\n9) 版面自检（1280 × 720）');
+const EPS = 0.51;
+function overlaps(a, b) {
+  return a.x < b.x + b.w - EPS && b.x < a.x + a.w - EPS &&
+         a.y < b.y + b.h - EPS && b.y < a.y + a.h - EPS;
+}
+function label(r, i) {
+  return '#' + i + '(x=' + Math.round(r.x) + ',y=' + Math.round(r.y) +
+    ',w=' + Math.round(r.w) + ',h=' + Math.round(r.h) +
+    (r.player !== undefined ? ',玩家' + r.player : '') + ')';
+}
+function allInside(list, tag) {
+  const vw = 1280, vh = 720;
+  const bad = [];
+  list.forEach((r, i) => {
+    if (r.x < -EPS || r.y < -EPS || r.x + r.w > vw + EPS || r.y + r.h > vh + EPS) {
+      bad.push(tag + label(r, i));
+    }
+  });
+  ok(bad.length === 0, tag + '全部在画布内', bad.slice(0, 3).join(' / '));
+}
+function noOverlap(a, b, name) {
+  const bad = [];
+  a.forEach((r, i) => {
+    b.forEach((s, j) => { if (overlaps(r, s)) bad.push(label(r, i) + ' × ' + label(s, j)); });
+  });
+  ok(bad.length === 0, name, bad.slice(0, 3).join(' / '));
+}
+
+// 最挤的局面：四家各 21 张牌河 + 四组副露 + 最宽的一排按钮
+dbg.start();
+[0, 1, 2, 3].forEach((p) => dbg.fillDiscards(p, 21));
+dbg.fillMelds(0, 4); dbg.fillMelds(1, 2); dbg.fillMelds(2, 2); dbg.fillMelds(3, 2);
+dbg.fakeClaim();
+const L = dbg.layout;
+
+allInside(L.hand, '手牌');
+allInside(L.discards, '牌河');
+allInside(L.melds, '副露');
+allInside(L.buttons, '按钮');
+
+const sysBtns = L.buttons.filter((b) => b.action === 'mute' || b.action === 'fullscreen');
+const actBtns = L.buttons.filter((b) => sysBtns.indexOf(b) < 0);
+ok(actBtns.length >= 3, '最宽的一排操作按钮确实画出来了', '共 ' + actBtns.length + ' 个');
+
+const myMelds = L.melds.filter((m) => m.player === 0);
+const myDiscards = L.discards.filter((d) => d.player === 0);
+noOverlap(L.hand, myDiscards, '手牌不压自己的牌河');
+noOverlap(L.hand, myMelds, '手牌不压自己的副露');
+noOverlap(L.hand, actBtns, '手牌不压操作按钮');
+noOverlap(myMelds, actBtns, '副露不压操作按钮');
+noOverlap(myDiscards, actBtns, '牌河不压操作按钮');
+noOverlap(myDiscards, myMelds, '牌河不压副露');
+noOverlap(L.hand, sysBtns, '手牌不压右上角系统按钮');
+
+// 满手牌（14 张）也要放得下、不压按钮
+dbg.start();
+[0, 1, 2, 3].forEach((p) => dbg.fillDiscards(p, 21));
+dbg.fakeClaim();
+const L2 = dbg.layout;
+const handFull = L2.hand.filter((h) => h.w > 30);
+ok(handFull.length >= 13, '满手牌时手牌张数正常', '共 ' + handFull.length + ' 张');
+allInside(handFull, '满手牌');
+noOverlap(handFull, L2.buttons.filter((b) => b.action !== 'mute' && b.action !== 'fullscreen'),
+  '满手牌不压操作按钮');
 
 /* ---------------- 结果 ---------------- */
 console.log('\n结果: ' + pass + ' 通过, ' + fail + ' 失败');

@@ -584,84 +584,168 @@
 
   function nowT() { const a = audioCtx(); return a ? a.currentTime : null; }
 
-  // 一个振荡器音符：f0 → f1 扫频
-  function tone(t0, dur, f0, f1, type, vol) {
+  /* —— 音频总线：一路干声 + 一路短混响，整体过温和压限，避免刺耳 ——
+   * 件件都用 try/catch 包住：老浏览器缺哪个节点就自动降级，不报错。 */
+  let MASTER = null, DRY = null, WET_IN = null;
+
+  function buildBus(a) {
+    if (MASTER) return;
+    try {
+      MASTER = a.createGain(); MASTER.gain.value = 0.9;
+      if (a.createDynamicsCompressor) {
+        const comp = a.createDynamicsCompressor();
+        try {
+          comp.threshold.value = -15; comp.knee.value = 24; comp.ratio.value = 3.4;
+          comp.attack.value = 0.004; comp.release.value = 0.24;
+        } catch (e) { /* 某些实现只读 */ }
+        MASTER.connect(comp); comp.connect(a.destination);
+      } else {
+        MASTER.connect(a.destination);
+      }
+      DRY = a.createGain(); DRY.gain.value = 0.86; DRY.connect(MASTER);
+      // 短混响：现场生成一段指数衰减的噪声脉冲响应
+      if (a.createConvolver && a.createBuffer) {
+        const len = Math.max(1, Math.floor(a.sampleRate * 0.32));
+        const ir = a.createBuffer(2, len, a.sampleRate);
+        for (let ch = 0; ch < 2; ch++) {
+          const d = ir.getChannelData(ch);
+          for (let i = 0; i < len; i++) {
+            const x = i / len;
+            d[i] = (Math.random() * 2 - 1) * Math.pow(1 - x, 3.1);
+          }
+        }
+        const conv = a.createConvolver(); conv.buffer = ir;
+        WET_IN = a.createGain(); WET_IN.gain.value = 0.26;
+        const wet = a.createGain(); wet.gain.value = 0.55;
+        WET_IN.connect(conv); conv.connect(wet); wet.connect(MASTER);
+      }
+    } catch (e) { MASTER = null; DRY = null; WET_IN = null; }
+  }
+
+  // 把某个输出节点接到总线上（wet 为送混响的量，0~1）
+  function out(node, wet) {
+    const a = audioCtx(); if (!a) return;
+    buildBus(a);
+    try {
+      if (DRY) node.connect(DRY); else node.connect(a.destination);
+      if (WET_IN && wet) node.connect(WET_IN);
+    } catch (e) { try { node.connect(a.destination); } catch (e2) { /* 忽略 */ } }
+  }
+
+  // 一个音符：两只轻微失谐的振荡器（更厚）+ 会收拢的低通 + 平滑包络
+  function tone(t0, dur, f0, f1, type, vol, wet) {
     const a = audioCtx(); if (!a) return;
     try {
-      const o = a.createOscillator(), g = a.createGain();
-      o.type = type || 'sine';
-      o.frequency.setValueAtTime(f0, t0);
-      if (f1 && f1 !== f0) o.frequency.exponentialRampToValueAtTime(Math.max(1, f1), t0 + dur);
+      const atk = Math.min(0.02, Math.max(0.002, dur * 0.25));
+      const g = a.createGain();
       g.gain.setValueAtTime(0.0001, t0);
-      g.gain.exponentialRampToValueAtTime(Math.max(0.0002, vol || 0.1), t0 + 0.006);
+      g.gain.linearRampToValueAtTime(Math.max(0.0004, vol || 0.1), t0 + atk);
       g.gain.exponentialRampToValueAtTime(0.0001, t0 + dur);
-      o.connect(g); g.connect(a.destination);
-      o.start(t0); o.stop(t0 + dur + 0.03);
+      const lp = a.createBiquadFilter();
+      lp.type = 'lowpass'; lp.Q.value = 0.6;
+      const hi = Math.min(11000, Math.max(700, (f1 || f0) * 5.5));
+      const lo = Math.max(300, (f1 || f0) * 1.7);
+      lp.frequency.setValueAtTime(hi, t0);
+      lp.frequency.exponentialRampToValueAtTime(lo, t0 + dur);
+      lp.connect(g);
+      for (let k = 0; k < 2; k++) {
+        const o = a.createOscillator();
+        o.type = type || 'sine';
+        try { o.detune.value = k === 0 ? -5 : 5; } catch (e) { /* 忽略 */ }
+        o.frequency.setValueAtTime(f0, t0);
+        if (f1 && f1 !== f0) o.frequency.exponentialRampToValueAtTime(Math.max(1, f1), t0 + dur);
+        o.connect(lp);
+        o.start(t0); o.stop(t0 + dur + 0.05);
+      }
+      out(g, wet);
     } catch (e) { /* 忽略音频异常 */ }
   }
 
-  // 噪声脉冲：模拟牌碰桌的「啪」
-  function noiseHit(t0, dur, vol, hz) {
+  // 噪声脉冲：牌磕在桌面上的空气声（指数衰减，比线性更自然）
+  function noiseHit(t0, dur, vol, hz, q, wet) {
     const a = audioCtx(); if (!a) return;
     try {
       const n = Math.max(1, Math.floor(a.sampleRate * dur));
       const buf = a.createBuffer(1, n, a.sampleRate);
       const d = buf.getChannelData(0);
-      for (let i = 0; i < n; i++) d[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / n, 2.2);
+      for (let i = 0; i < n; i++) {
+        const x = i / n;
+        d[i] = (Math.random() * 2 - 1) * Math.exp(-x * 8.5) * (1 - x);
+      }
       const src = a.createBufferSource(); src.buffer = buf;
       const f = a.createBiquadFilter();
-      f.type = 'bandpass'; f.frequency.value = hz || 1800; f.Q.value = 0.9;
+      f.type = 'bandpass'; f.frequency.value = hz || 1800; f.Q.value = q || 0.9;
       const g = a.createGain(); g.gain.value = vol || 0.1;
-      src.connect(f); f.connect(g); g.connect(a.destination);
+      src.connect(f); f.connect(g);
+      out(g, wet);
       src.start(t0);
     } catch (e) { /* 忽略音频异常 */ }
   }
 
-  function sfxDiscard() {              // 出牌：短促木质「啪」
-    const t = nowT(); if (t === null) return;
-    noiseHit(t, 0.055, 0.13, 2400);
-    tone(t, 0.085, 210, 120, 'triangle', 0.10);
+  // 一次「牌磕桌」：空气声 + 木头的低频共鸣，听起来才像真牌
+  function clack(t0, vol, hz, dur, wet) {
+    noiseHit(t0, dur, vol, hz, 1.6, wet);
+    tone(t0, dur * 2.3, hz * 0.22, hz * 0.13, 'sine', vol * 0.5, wet);
+    tone(t0 + 0.004, dur * 1.4, hz * 0.62, hz * 0.5, 'triangle', vol * 0.28, wet);
   }
-  function sfxDrawTile() {             // 摸牌：轻「嗒」
+
+  function sfxDiscard() {              // 普通出牌：一声清脆「啪嗒」，干净利落
     const t = nowT(); if (t === null) return;
-    noiseHit(t, 0.035, 0.05, 3200);
+    clack(t, 0.26, 2600, 0.05, 0.16);
+    tone(t + 0.012, 0.07, 1180, 880, 'triangle', 0.05, 0.1);
   }
-  function sfxPon() {                  // 碰：两连击 + 明亮和弦
+  function sfxDrawTile() {             // 摸牌：轻轻一声「嗒」
     const t = nowT(); if (t === null) return;
-    noiseHit(t, 0.06, 0.17, 1500);
-    noiseHit(t + 0.085, 0.07, 0.19, 1350);
-    tone(t, 0.11, 392, 392, 'square', 0.05);
-    tone(t + 0.085, 0.22, 587, 587, 'square', 0.05);
+    clack(t, 0.13, 3400, 0.035, 0.1);
   }
-  function sfxKan() {                  // 杠：三连击，更厚重
+  function sfxPon() {                  // 碰：三张牌连续拍下 + 明亮上行三音
     const t = nowT(); if (t === null) return;
-    for (let i = 0; i < 3; i++) {
-      noiseHit(t + i * 0.075, 0.07, 0.18, 1200 - i * 120);
-      tone(t + i * 0.075, 0.1, 300 - i * 20, 240, 'triangle', 0.055);
-    }
-    tone(t + 0.24, 0.3, 196, 196, 'sawtooth', 0.045);
+    clack(t,         0.30, 2100, 0.06, 0.30);
+    clack(t + 0.085, 0.32, 2350, 0.06, 0.30);
+    clack(t + 0.170, 0.34, 2600, 0.07, 0.34);
+    tone(t + 0.19, 0.42, 784, 784, 'triangle', 0.10, 0.5);   // G5
+    tone(t + 0.19, 0.42, 1175, 1175, 'sine', 0.07, 0.5);     // D6
+    tone(t + 0.30, 0.50, 1568, 1568, 'sine', 0.06, 0.55);    // G6
   }
-  function sfxHu() {                   // 自己胡：上行琶音
+  function sfxKan() {                  // 杠：四张牌更重地砸下 + 低音锣，明显比碰低沉悠长
     const t = nowT(); if (t === null) return;
-    const seq = [523, 659, 784, 1047, 1319];
+    for (let i = 0; i < 4; i++) clack(t + i * 0.072, 0.32, 1500 - i * 90, 0.08, 0.30);
+    tone(t + 0.30, 1.10, 146, 138, 'sine', 0.20, 0.7);       // 低音锣
+    tone(t + 0.30, 0.90, 219, 207, 'triangle', 0.10, 0.65);
+    tone(t + 0.34, 1.40, 73, 70, 'sine', 0.16, 0.5);         // 更深的一层
+  }
+  function sfxHu() {                   // 自己胡：上行琶音，铃铛感
+    const t = nowT(); if (t === null) return;
+    const seq = [523, 659, 784, 1047, 1319, 1568];
     for (let i = 0; i < seq.length; i++) {
-      tone(t + i * 0.085, i === seq.length - 1 ? 0.5 : 0.18, seq[i], seq[i], 'triangle', 0.09);
+      const last = (i === seq.length - 1);
+      tone(t + i * 0.08, last ? 0.85 : 0.22, seq[i], seq[i], 'triangle', last ? 0.12 : 0.085, 0.5);
+      tone(t + i * 0.08, last ? 0.70 : 0.16, seq[i] * 2, seq[i] * 2, 'sine', last ? 0.05 : 0.03, 0.45);
     }
-    noiseHit(t, 0.05, 0.1, 2600);
+    clack(t, 0.2, 2800, 0.05, 0.2);
   }
-  function sfxOtherWin() {             // 别人胡：下行两声
+  function sfxOtherWin() {             // 别人胡：下行两声，柔和
     const t = nowT(); if (t === null) return;
-    tone(t, 0.22, 392, 392, 'triangle', 0.08);
-    tone(t + 0.18, 0.36, 294, 294, 'triangle', 0.08);
+    tone(t, 0.32, 440, 440, 'triangle', 0.09, 0.35);
+    tone(t + 0.19, 0.50, 330, 294, 'triangle', 0.09, 0.40);
+    tone(t + 0.19, 0.50, 165, 147, 'sine', 0.05, 0.30);
   }
   function sfxFlow() {                 // 流局：低沉一下
     const t = nowT(); if (t === null) return;
-    tone(t, 0.5, 220, 165, 'sine', 0.07);
+    tone(t, 0.70, 240, 150, 'sine', 0.10, 0.40);
+    tone(t + 0.05, 0.65, 120, 96, 'sine', 0.07, 0.30);
   }
-  function sfxTap() {                  // 按钮
+  function sfxTap() {                  // 按钮：轻点
     const t = nowT(); if (t === null) return;
-    tone(t, 0.05, 880, 660, 'square', 0.04);
+    tone(t, 0.055, 920, 700, 'triangle', 0.05, 0.12);
+    noiseHit(t, 0.02, 0.045, 3600, 1.4, 0.08);
   }
+
+  // 名字表（测试与调试用；顺序即 sfxAll 的播放顺序）
+  const SFX = {
+    tap: sfxTap, discard: sfxDiscard, draw: sfxDrawTile, pon: sfxPon,
+    kan: sfxKan, hu: sfxHu, otherWin: sfxOtherWin, flow: sfxFlow
+  };
 
   function toggleMute() {
     muted = !muted;
@@ -715,9 +799,9 @@
 
   // 牌面尺寸
   // 构建标记：用于确认浏览器实际加载的是哪一版（部署漏传 / 缓存排查用）
-  const BUILD = '2026-10-26 #4';
+  const BUILD = '2026-10-26 #5';
 
-  const TW = 46, TH = 64;         // 竖着的牌（手牌/牌河）
+  const TW = 56, TH = 76;         // 竖着的牌（手牌/牌河）—— 2026-10-26 放大，手牌更好认
   const TD = 0.30;                // 牌的「厚度」比率（用于侧向牌）
 
   function roundRect(x, y, w, h, r) {
@@ -1019,6 +1103,8 @@
   // 手牌布局：返回每张牌的位置，供点击命中测试使用
   let handHit = [];      // [{x,y,w,h,tile,index}]
   let buttonHit = [];    // [{x,y,w,h,action,label}]
+  let discardHit = [];   // [{x,y,w,h,player}] 只用于版面自检
+  let meldHit = [];      // [{x,y,w,h,player,kind}] 只用于版面自检
 
   /* ---- 全屏与静音按钮 ---- */
 
@@ -1217,6 +1303,8 @@
 
     handHit = [];
     buttonHit = [];
+    discardHit = [];
+    meldHit = [];
 
     if (G.phase === 'title') {
       renderTitle();
@@ -1310,45 +1398,77 @@
   function drawOpponentMelds(p, cx, cy, side, tw, th) {
     const pl = G.players[p];
     if (!pl.melds.length) return;
-    const mw = tw * 0.78, mh = th * 0.78;
-    let ox, oy;
-    if (side === 'top') { ox = cx + 150; oy = cy + 8; }
-    else if (side === 'left') { ox = cx - 20; oy = cy + 130; }
-    else { ox = cx + 6; oy = cy + 170; }
+    const mw = tw * 0.72, mh = th * 0.72;      // 副露比手牌再小一圈
+    const step = mw + 2;
 
-    let idx = 0;
+    // 摊平成一串格子：每组末尾留一个空格当组间隔
+    const cells = [];
     for (const m of pl.melds) {
-      for (const t of m.tiles) {
-        if (side === 'top') drawTile(t, ox + idx * (mw + 2), oy, mw, mh, {});
-        else drawTile(t, ox, oy + idx * (mw + 2), mh, mw, {});
-        idx++;
+      for (const t of m.tiles) cells.push(t);
+      cells.push(null);
+    }
+
+    if (side === 'top') {
+      // 顶家：吊在手牌下方，最多 8 格一行；靠左放，避开它自己的牌河
+      const PER_ROW = 8;
+      const rows = Math.ceil(cells.length / PER_ROW);
+      const stripW = Math.min(cells.length, PER_ROW) * step - 2;
+      const stripH = rows * (mh + 3) - 3;
+      let ox = Math.min(cx + 150, (VW / 2 - 130) - 8 - stripW);
+      let oy = cy + th + 8;
+      ox = Math.max(120, Math.min(ox, VW - 26 - stripW));
+      oy = Math.max(26, Math.min(oy, VH - 26 - stripH));
+      for (let i = 0; i < cells.length; i++) {
+        if (cells[i] == null) continue;
+        const rx = ox + (i % PER_ROW) * step;
+        const ry = oy + Math.floor(i / PER_ROW) * (mh + 3);
+        drawTile(cells[i], rx, ry, mw, mh, {});
+        meldHit.push({ x: rx, y: ry, w: mw, h: mh, player: p, kind: 'meld' });
       }
-      idx++;
+      return;
+    }
+
+    // 左右两家：竖着摞在手牌内侧，最多 10 格一列，不够就折列
+    const PER_COL = 10;
+    const cols = Math.ceil(cells.length / PER_COL);
+    const stripH = Math.min(cells.length, PER_COL) * step - 2;
+    const stripW = cols * (mh + 4) - 4;
+    const ox = side === 'left' ? cx + th / 2 + 10 : cx - th / 2 - 10 - stripW;
+    let oy = cy + 40;
+    oy = Math.max(150, Math.min(oy, VH - 26 - stripH));
+    for (let i = 0; i < cells.length; i++) {
+      if (cells[i] == null) continue;
+      const rx = ox + Math.floor(i / PER_COL) * (mh + 4);
+      const ry = oy + (i % PER_COL) * step;
+      drawTile(cells[i], rx, ry, mh, mw, {});
+      meldHit.push({ x: rx, y: ry, w: mh, h: mw, player: p, kind: 'meld' });
     }
   }
 
   function drawAllDiscards() {
-    // 每个玩家的牌河位置
+    // 每个玩家的牌河位置（放大牌面后：7 列，最多 3 排，避开下方按钮与手牌）
     const spots = {
-      0: { x: VW / 2 - 190, y: VH - 250, dir: 'h' },
-      1: { x: VW - 300, y: VH / 2 - 110, dir: 'v' },
-      2: { x: VW / 2 - 190, y: 150, dir: 'h' },
+      0: { x: VW / 2 - 130, y: VH - 340, dir: 'h' },
+      1: { x: VW - 340, y: VH / 2 - 110, dir: 'v' },
+      2: { x: VW / 2 - 130, y: 170, dir: 'h' },
       3: { x: 176, y: VH / 2 - 110, dir: 'v' }
     };
+    const COLS = 7;
     for (let p = 0; p < 4; p++) {
       const s = spots[p];
       const dw = TW * 0.60, dh = TH * 0.60;
       const pl = G.players[p];
       for (let i = 0; i < pl.discards.length; i++) {
-        const col = i % 6, row = Math.floor(i / 6);
+        const col = i % COLS, row = Math.floor(i / COLS);
         const isLast = (G.lastDiscard && G.lastDiscard.from === p && i === pl.discards.length - 1);
+        let rx, ry, rw, rh;
         if (s.dir === 'h') {
-          drawTile(pl.discards[i], s.x + col * (dw + 3), s.y + row * (dh + 3), dw, dh,
-            { highlight: isLast });
+          rx = s.x + col * (dw + 3); ry = s.y + row * (dh + 3); rw = dw; rh = dh;
         } else {
-          drawTile(pl.discards[i], s.x + row * (dh + 3), s.y + col * (dw + 3), dh, dw,
-            { highlight: isLast });
+          rx = s.x + row * (dh + 3); ry = s.y + col * (dw + 3); rw = dh; rh = dw;
         }
+        drawTile(pl.discards[i], rx, ry, rw, rh, { highlight: isLast });
+        discardHit.push({ x: rx, y: ry, w: rw, h: rh, player: p });
       }
     }
   }
@@ -1378,15 +1498,22 @@
   function drawMyMelds() {
     const pl = G.players[0];
     if (!pl.melds.length) return;
-    let x = VW / 2 - 240;
-    const y = VH - TH - 100;
-    const mw = TW * 0.62, mh = TH * 0.62;
+    const mw = TW * 0.55, mh = TH * 0.55, gap = 2;
+    // 摊平成一串格子（组末留空当间隔）
+    const cells = [];
     for (const m of pl.melds) {
-      for (const t of m.tiles) {
-        drawTile(t, x, y, mw, mh, {});
-        x += mw + 2;
-      }
-      x += 12;
+      for (const t of m.tiles) cells.push(t);
+      cells.push(null);
+    }
+    // 贴左下角放，避开中间的操作按钮；超过 10 格就往上再起一排
+    const PER_ROW = 10;
+    const x0 = 40, y0 = VH - TH - 92;
+    for (let i = 0; i < cells.length; i++) {
+      if (cells[i] == null) continue;
+      const rx = x0 + (i % PER_ROW) * (mw + gap);
+      const ry = y0 - Math.floor(i / PER_ROW) * (mh + 6);
+      drawTile(cells[i], rx, ry, mw, mh, {});
+      meldHit.push({ x: rx, y: ry, w: mw, h: mh, player: 0, kind: 'meld' });
     }
   }
 
@@ -1724,8 +1851,49 @@
     action: function (a) { doAction(a); },
     // 测试钩子：真跑一遍所有音效（异常会抛出，交给测试断言）
     sfxAll: function () {
-      [sfxTap, sfxDiscard, sfxDrawTile, sfxPon, sfxKan, sfxHu, sfxOtherWin, sfxFlow]
-        .forEach(function (f) { f(); });
+      Object.keys(SFX).forEach(function (k) { SFX[k](); });
+    },
+    // 测试钩子：单独跑一个音效，用来比较「出牌 / 碰 / 杠」是不是真的三种声音
+    sfxOne: function (name) { if (SFX[name]) SFX[name](); },
+    // 版面自检：把这一次 render 真正画出来的方块交出来（放大牌面后用来防重叠/防出界）
+    get layout() {
+      const cp = (r) => ({ x: r.x, y: r.y, w: r.w, h: r.h, player: r.player, kind: r.kind });
+      return {
+        canvas: { w: VW, h: VH },
+        hand: handHit.map(cp),
+        buttons: buttonHit.map((r) => ({ x: r.x, y: r.y, w: r.w, h: r.h, action: r.action })),
+        discards: discardHit.map(cp),
+        melds: meldHit.map(cp)
+      };
+    },
+    // 测试钩子：塞 n 张假牌河（只为验证版面，不参与对局逻辑）
+    fillDiscards: function (p, n) {
+      const pl = G.players[p];
+      const pool = [1, 2, 3, 4, 5, 6, 7, 8, 9, 11, 12, 13, 21, 22, 23, 31, 32, 33, 34, 35];
+      while (pl.discards.length < n) pl.discards.push(pool[pl.discards.length % pool.length]);
+      recomputeTenpai();
+      render();
+    },
+    // 测试钩子：塞 k 组假副露（每组三张），同时把手牌削到合理张数
+    fillMelds: function (p, k) {
+      const pl = G.players[p];
+      const pool = [1, 2, 3, 11, 12, 13, 21, 22, 23, 31, 32, 33];
+      pl.melds = [];
+      for (let i = 0; i < k; i++) {
+        const t = pool[(i * 3) % pool.length];
+        pl.melds.push({ type: 'pon', tiles: [t, t, t], from: (p + 1) % 4 });
+      }
+      const keep = Math.max(1, 13 - 3 * k);
+      if (pl.hand.length > keep) pl.hand = pl.hand.slice(0, keep);
+      render();
+    },
+    // 测试钩子：伪造「可胡/可杠/可碰」的等待状态，把最宽的一排按钮画出来
+    fakeClaim: function () {
+      G.phase = 'playing';
+      G.turn = 1;
+      G.waitingFor = 'claim';
+      G.pendingClaim = { from: 1, tile: 1, options: ['hu', 'kan', 'pon'] };
+      render();
     },
     fsSupported: fsSupported,
     toggleFullscreen: toggleFullscreen
