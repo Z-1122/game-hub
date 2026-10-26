@@ -221,6 +221,10 @@
   var empty = document.getElementById('empty');
   var stats = document.getElementById('stats');
 
+  // 页面自己的版本号：改版面/排序/字段时同步改这里，页脚会显示出来，
+  // 用来一眼判断手机上看到的是不是最新版（旧缓存不会有这个号）
+  var HUB_VERSION = '2026-10-27a';
+
   function esc(s) {
     return String(s == null ? '' : s)
       .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
@@ -274,7 +278,8 @@
     if (site.subtitle) document.getElementById('siteSubtitle').textContent = site.subtitle;
     if (site.author) {
       document.getElementById('footerText').textContent =
-        '© ' + new Date().getFullYear() + ' ' + site.author + ' · 共 ' + games.length + ' 个游戏';
+        '© ' + new Date().getFullYear() + ' ' + site.author + ' · 共 ' + games.length + ' 个游戏' +
+        ' · 页面版本 v' + HUB_VERSION;
     }
     if (site.github) {
       var fl = document.getElementById('footerLink');
