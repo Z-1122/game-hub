@@ -584,23 +584,29 @@
 
   /* —— 音频总线：一路干声 + 一路短混响，整体过温和压限，避免刺耳 ——
    * 件件都用 try/catch 包住：老浏览器缺哪个节点就自动降级，不报错。 */
-  let MASTER = null, DRY = null, WET_IN = null;
+  let MASTER = null, DRY = null, WET_IN = null, WARM = null;
 
   function buildBus(a) {
     if (MASTER) return;
     try {
-      MASTER = a.createGain(); MASTER.gain.value = 0.9;
+      MASTER = a.createGain(); MASTER.gain.value = 0.68;
       if (a.createDynamicsCompressor) {
         const comp = a.createDynamicsCompressor();
         try {
-          comp.threshold.value = -15; comp.knee.value = 24; comp.ratio.value = 3.4;
-          comp.attack.value = 0.004; comp.release.value = 0.24;
+          comp.threshold.value = -20; comp.knee.value = 26; comp.ratio.value = 2.8;
+          comp.attack.value = 0.006; comp.release.value = 0.30;
         } catch (e) { /* 某些实现只读 */ }
-        MASTER.connect(comp); comp.connect(a.destination);
+        let tail = MASTER;
+        if (a.createBiquadFilter) {
+          WARM = a.createBiquadFilter();
+          WARM.type = 'lowpass'; WARM.frequency.value = 4600; WARM.Q.value = 0.4;
+          MASTER.connect(WARM); tail = WARM;
+        }
+        tail.connect(comp); comp.connect(a.destination);
       } else {
         MASTER.connect(a.destination);
       }
-      DRY = a.createGain(); DRY.gain.value = 0.86; DRY.connect(MASTER);
+      DRY = a.createGain(); DRY.gain.value = 0.88; DRY.connect(WARM || MASTER);
       // 短混响：现场生成一段指数衰减的噪声脉冲响应
       if (a.createConvolver && a.createBuffer) {
         const len = Math.max(1, Math.floor(a.sampleRate * 0.32));
@@ -615,7 +621,7 @@
         const conv = a.createConvolver(); conv.buffer = ir;
         WET_IN = a.createGain(); WET_IN.gain.value = 0.26;
         const wet = a.createGain(); wet.gain.value = 0.55;
-        WET_IN.connect(conv); conv.connect(wet); wet.connect(MASTER);
+        WET_IN.connect(conv); conv.connect(wet); wet.connect(WARM || MASTER);
       }
     } catch (e) { MASTER = null; DRY = null; WET_IN = null; }
   }
@@ -672,9 +678,19 @@
       }
       const src = a.createBufferSource(); src.buffer = buf;
       const f = a.createBiquadFilter();
-      f.type = 'bandpass'; f.frequency.value = hz || 1800; f.Q.value = q || 0.9;
+      f.type = 'bandpass'; f.frequency.value = hz || 1500; f.Q.value = q || 0.7;
       const g = a.createGain(); g.gain.value = vol || 0.1;
-      src.connect(f); f.connect(g);
+      src.connect(f);
+      if (a.createBiquadFilter) {
+        // 再压一道低通，削掉噪声里刺耳的「嘶」
+        const soft = a.createBiquadFilter();
+        soft.type = 'lowpass';
+        soft.frequency.value = Math.max(900, (hz || 1500) * 1.7);
+        soft.Q.value = 0.5;
+        f.connect(soft); soft.connect(g);
+      } else {
+        f.connect(g);
+      }
       out(g, wet);
       src.start(t0);
     } catch (e) { /* 忽略音频异常 */ }
@@ -682,49 +698,49 @@
 
   // 一次「牌磕桌」：空气声 + 木头的低频共鸣，听起来才像真牌
   function clack(t0, vol, hz, dur, wet) {
-    noiseHit(t0, dur, vol, hz, 1.6, wet);
-    tone(t0, dur * 2.3, hz * 0.22, hz * 0.13, 'sine', vol * 0.5, wet);
-    tone(t0 + 0.004, dur * 1.4, hz * 0.62, hz * 0.5, 'triangle', vol * 0.28, wet);
+    noiseHit(t0, dur * 1.15, vol * 0.78, hz * 0.66, 1.05, wet);
+    tone(t0, dur * 2.4, hz * 0.17, hz * 0.10, 'sine', vol * 0.42, wet);
+    tone(t0 + 0.004, dur * 1.5, hz * 0.40, hz * 0.32, 'sine', vol * 0.15, wet);
   }
 
   function sfxDiscard() {              // 普通出牌：一声清脆「啪嗒」，干净利落
     const t = nowT(); if (t === null) return;
-    clack(t, 0.26, 2600, 0.05, 0.16);
-    tone(t + 0.012, 0.07, 1180, 880, 'triangle', 0.05, 0.1);
+    clack(t, 0.23, 2200, 0.055, 0.16);
+    tone(t + 0.012, 0.08, 760, 640, 'sine', 0.035, 0.1);
   }
   function sfxDrawTile() {             // 摸牌：轻轻一声「嗒」
     const t = nowT(); if (t === null) return;
-    clack(t, 0.13, 3400, 0.035, 0.1);
+    clack(t, 0.10, 2400, 0.04, 0.1);
   }
   function sfxRivalDiscard() {         // 别人出牌：比自己的轻、比摸牌实，听得出方位
     const t = nowT(); if (t === null) return;
-    clack(t, 0.17, 2200, 0.045, 0.22);
+    clack(t, 0.14, 1800, 0.05, 0.22);
   }
   function sfxPon() {                  // 碰：三张牌连续拍下 + 明亮上行三音
     const t = nowT(); if (t === null) return;
-    clack(t,         0.30, 2100, 0.06, 0.30);
-    clack(t + 0.085, 0.32, 2350, 0.06, 0.30);
-    clack(t + 0.170, 0.34, 2600, 0.07, 0.34);
-    tone(t + 0.19, 0.42, 784, 784, 'triangle', 0.10, 0.5);   // G5
-    tone(t + 0.19, 0.42, 1175, 1175, 'sine', 0.07, 0.5);     // D6
-    tone(t + 0.30, 0.50, 1568, 1568, 'sine', 0.06, 0.55);    // G6
+    clack(t,         0.23, 1750, 0.065, 0.30);
+    clack(t + 0.085, 0.25, 1900, 0.065, 0.30);
+    clack(t + 0.170, 0.27, 2050, 0.075, 0.34);
+    tone(t + 0.19, 0.45, 523, 523, 'sine', 0.075, 0.5);   // G5
+    tone(t + 0.19, 0.45, 784, 784, 'sine', 0.055, 0.5);     // D6
+    tone(t + 0.30, 0.52, 1046, 1046, 'sine', 0.045, 0.55);    // G6
   }
   function sfxKan() {                  // 杠：四张牌更重地砸下 + 低音锣，明显比碰低沉悠长
     const t = nowT(); if (t === null) return;
-    for (let i = 0; i < 4; i++) clack(t + i * 0.072, 0.32, 1500 - i * 90, 0.08, 0.30);
-    tone(t + 0.30, 1.10, 146, 138, 'sine', 0.20, 0.7);       // 低音锣
-    tone(t + 0.30, 0.90, 219, 207, 'triangle', 0.10, 0.65);
+    for (let i = 0; i < 4; i++) clack(t + i * 0.072, 0.25, 1350 - i * 90, 0.085, 0.30);
+    tone(t + 0.30, 1.10, 146, 138, 'sine', 0.17, 0.7);       // 低音锣
+    tone(t + 0.30, 0.90, 219, 207, 'sine', 0.075, 0.65);
     tone(t + 0.34, 1.40, 73, 70, 'sine', 0.16, 0.5);         // 更深的一层
   }
   function sfxHu() {                   // 自己胡：上行琶音，铃铛感
     const t = nowT(); if (t === null) return;
-    const seq = [523, 659, 784, 1047, 1319, 1568];
+    const seq = [523, 659, 784, 1047, 1319];
     for (let i = 0; i < seq.length; i++) {
       const last = (i === seq.length - 1);
-      tone(t + i * 0.08, last ? 0.85 : 0.22, seq[i], seq[i], 'triangle', last ? 0.12 : 0.085, 0.5);
-      tone(t + i * 0.08, last ? 0.70 : 0.16, seq[i] * 2, seq[i] * 2, 'sine', last ? 0.05 : 0.03, 0.45);
+      tone(t + i * 0.08, last ? 0.85 : 0.22, seq[i], seq[i], 'sine', last ? 0.10 : 0.07, 0.5);
+      tone(t + i * 0.08, last ? 0.70 : 0.16, seq[i] * 2, seq[i] * 2, 'sine', last ? 0.035 : 0.02, 0.45);
     }
-    clack(t, 0.2, 2800, 0.05, 0.2);
+    clack(t, 0.16, 2200, 0.05, 0.2);
   }
   function sfxOtherWin() {             // 别人胡：下行两声，柔和
     const t = nowT(); if (t === null) return;
@@ -739,8 +755,8 @@
   }
   function sfxTap() {                  // 按钮：轻点
     const t = nowT(); if (t === null) return;
-    tone(t, 0.055, 920, 700, 'triangle', 0.05, 0.12);
-    noiseHit(t, 0.02, 0.045, 3600, 1.4, 0.08);
+    tone(t, 0.06, 720, 600, 'sine', 0.04, 0.12);
+    noiseHit(t, 0.022, 0.03, 2200, 1.0, 0.08);
   }
 
   // 名字表（测试与调试用；顺序即 sfxAll 的播放顺序）
@@ -1719,9 +1735,21 @@
     }
   }
 
+  // 手牌自动排序：牌号本身就是「万 1-9、条 11-19、筒 21-29、字 31-37」，
+  // 按号码升序排出来正好是「万 → 条 → 筒 → 字」，同种内从小到大，和真人码牌一致。
+  function sortHandTiles(tiles) {
+    return tiles.slice().sort(function (a, b) { return a - b; });
+  }
+
   function drawMyHand() {
     const pl = G.players[0];
-    const n = pl.hand.length;
+    const raw = pl.hand || [];
+    // 先给「摸到的那张」打标记，再整体排序——排完它落到该在的位置，高亮仍跟着它走
+    const marked = raw.map(function (t, i) {
+      return { t: t, drawn: (G.drawnTile != null && t === G.drawnTile && i === raw.length - 1) };
+    });
+    marked.sort(function (a, b) { return a.t - b.t; });
+    const n = marked.length;
     const gap = 4;
     const tw = TW, th = TH;
     const totalW = n * (tw + gap) - gap;
@@ -1729,9 +1757,9 @@
     const y = VH - th - 26;
 
     for (let i = 0; i < n; i++) {
-      const t = pl.hand[i];
-      const isDrawn = (G.drawnTile != null && t === G.drawnTile && i === n - 1);
-      const yy = isDrawn ? y - 8 : y;
+      const t = marked[i].t;
+      const isDrawn = marked[i].drawn;
+      const yy = isDrawn ? y - 6 : y;
       const canDiscard = (G.phase === 'playing' && G.turn === 0 && G.waitingFor === 'discard');
       const tenpaiHit = canDiscard && myTenpaiSet.has(t);
       const highlight = tenpaiHit || isDrawn;
@@ -2115,6 +2143,7 @@
     get waitingFor() { return G.waitingFor; },
     get wallLeft() { return G.wallLeft; },
     get hand() { return (G.players[0] ? G.players[0].hand.slice() : []); },
+    get sortedHand() { return sortHandTiles(G.players[0] ? G.players[0].hand : []); },
     get handCounts() { return G.players.map((p) => p.hand.length); },
     get melds() { return G.players.map((p) => p.melds.map((m) => m.type + ':' + m.tiles.join('-'))); },
     get discards() { return G.players.map((p) => p.discards.slice()); },
@@ -2141,7 +2170,7 @@
       const cp = (r) => ({ x: r.x, y: r.y, w: r.w, h: r.h, player: r.player, kind: r.kind });
       return {
         canvas: { w: VW, h: VH },
-        hand: handHit.map(cp),
+        hand: handHit.map((r) => ({ x: r.x, y: r.y, w: r.w, h: r.h, tile: r.tile, index: r.index })),
         buttons: buttonHit.map((r) => ({ x: r.x, y: r.y, w: r.w, h: r.h, action: r.action })),
         discards: discardHit.map(cp),
         melds: meldHit.map(cp)

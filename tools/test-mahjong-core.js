@@ -545,6 +545,33 @@ ok(/function autoPlay/.test(script), '超时自动代打函数存在');
 ok(/TURN_LIMIT = 30000/.test(script), '源码里写死了 30 秒');
 ok(/function sfxRivalDiscard/.test(script), '别人出牌有独立的轻一些的碰撞声');
 
+/* ---------------- 11) 手牌自动排序 + 音效柔化 ---------------- */
+console.log('\n11) 手牌排序与音色');
+dbg.start();
+let sorted = true;
+for (let round = 0; round < 6; round++) {
+  const h = (dbg.sortedHand || []).slice();
+  for (let i = 1; i < h.length; i++) if (h[i] < h[i - 1]) sorted = false;
+  // 再换一局，换不同的手牌继续验
+  dbg.start();
+}
+ok(sorted, '手牌按「万→条→筒→字」从小到大排好',
+  (dbg.sortedHand || []).map((t) => dbg.T.label(t)).join(' '));
+ok((dbg.sortedHand || []).join(',') === (dbg.hand || []).slice().sort(function (a, b) { return a - b; }).join(','),
+  '排序只影响摆放顺序，不丢牌');
+// 排序后仍要能点到自己想要的那张牌：命中区数量要和手牌数一致
+dbg.start();
+dbg.rawRender();
+const handHits = (dbg.layout && dbg.layout.hand) || [];
+ok(handHits.length === (dbg.hand || []).length, '排序后每张牌都还有可点击区域',
+  handHits.length + ' / ' + (dbg.hand || []).length);
+ok(handHits.every((c, i) => c.tile === dbg.sortedHand[i]), '点击区域与排序后的牌一一对应');
+// 音色：总线低通与更小的音量必须在源码里
+ok(/WARM\.type = 'lowpass'; WARM\.frequency\.value = 4600/.test(script), '音频总线上挂了 4.6kHz 低通，去掉刺耳高频');
+ok(/MASTER\.gain\.value = 0\.68/.test(script), '主音量降到 0.68');
+ok(!/'square'/.test(script), '没有残留方波音色（最刺耳的那种）');
+ok(!/sfxDiscard[\s\S]{0,400}?'sawtooth'/.test(script), '出牌音里没有锯齿波');
+
 /* ---------------- 结果 ---------------- */
 console.log('\n结果: ' + pass + ' 通过, ' + fail + ' 失败');
 process.exit(fail === 0 ? 0 : 1);
