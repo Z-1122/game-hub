@@ -624,6 +624,32 @@ ok(/MASTER\.gain\.value = 0\.68/.test(script), '主音量降到 0.68');
 ok(!/'square'/.test(script), '没有残留方波音色（最刺耳的那种）');
 ok(!/sfxDiscard[\s\S]{0,400}?'sawtooth'/.test(script), '出牌音里没有锯齿波');
 
+/* ---------------- 12) 对手牌背的立体细节 ---------------- */
+console.log('\n13) 对手牌背 3D 细节');
+dbg.start();
+dbg.rawRender();
+ok(/function drawTileBack\(x, y, w, h, opts\)/.test(script), '牌背是独立渲染函数，且接受 opts');
+ok(/if \(opts\.face === false\) return drawTileBack\(x, y, w, h, opts\);/.test(script),
+  '牌背不再走牌面那条路，避免两套逻辑打架');
+ok(/内凹面板/.test(script) && /斜纹/.test(script) && /中央小菱形/.test(script),
+  '牌背有内凹面板 / 防滑斜纹 / 中央菱形三层细节');
+ok(/const big = m >= 20;/.test(script), '小尺寸牌会跳过细节，避免糊成一团');
+ok(/function shadeTile/.test(script), '有统一的压暗函数做伪景深');
+ok(/const baseShade = side === 'top' \? 0\.05 : 0\.13;/.test(script),
+  '靠近自己的两家更暗、远端对家更亮，符合桌面光照');
+ok(/\{ shade: baseShade \+ \(i % 2\) \* 0\.012 \}/.test(script), '对家手牌有逐张轻微光衰');
+ok(/\{ shade: baseShade \+ \(i % 2\) \* 0\.018 \}/.test(script), '左右两家手牌有逐张轻微光衰');
+ok(/const msh = side === 'top' \? 0\.05 : 0\.11;/.test(script), '对手副露也跟着压暗');
+ok(/const dsh = \(p === 0 \? 0\.02 : \(p === 2 \? 0\.13 : 0\.10\)\) \+ row \* 0\.022;/.test(script),
+  '牌河越靠外越暗（按座位 + 排数递进）');
+ok(/drawTile\(pl\.discards\[i\], rx, ry, rw, rh, \{ highlight: isLast, shade: dsh \}\)/.test(script),
+  '牌河的压暗真正传进了绘制调用');
+let backDrawOk = true;
+try { dbg.fillMelds(1, 2); dbg.fillDiscards(2, 9); dbg.rawRender(); } catch (e) { backDrawOk = false; }
+ok(backDrawOk, '画满对手副露与牌河不抛异常');
+ok(((dbg.layout && dbg.layout.hand) || []).length === (dbg.hand || []).length,
+  '牌背改版后，自己手牌的点击区数量没变');
+
 /* ---------------- 结果 ---------------- */
 console.log('\n结果: ' + pass + ' 通过, ' + fail + ' 失败');
 process.exit(fail === 0 ? 0 : 1);

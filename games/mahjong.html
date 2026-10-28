@@ -997,7 +997,9 @@
   // 注意：整体仍然只占 w×h 的格子，侧面画在格子内部，避免放大后把版式挤歪
   function drawTile(t, x, y, w, h, opts) {
     opts = opts || {};
-    const face = opts.face !== false;
+    // 牌背有独立的一套精细画法
+    if (opts.face === false) return drawTileBack(x, y, w, h, opts);
+    const face = true;
     const hi = opts.highlight;
     const lift = opts.lift || 0;          // 摸到手的那张会抬起来
     const yy = y - lift;
@@ -1050,20 +1052,35 @@
     ctx.fillRect(x, yy + fh * 0.76, w, fh * 0.24);
     ctx.restore();
 
+    // ---- 倒角：左上亮、右下暗，像切出来的棱边 ----
+    ctx.save();
+    roundRect(x, yy, w, fh, r);
+    ctx.clip();
+    const bw = Math.max(1, m * 0.030);
+    ctx.lineWidth = bw;
+    ctx.strokeStyle = 'rgba(255,255,255,0.50)';
+    ctx.beginPath();
+    ctx.moveTo(x + bw * 0.5, yy + fh);
+    ctx.lineTo(x + bw * 0.5, yy + r * 0.6);
+    ctx.quadraticCurveTo(x + bw * 0.5, yy + bw * 0.5, x + r * 0.6, yy + bw * 0.5);
+    ctx.lineTo(x + w - r * 0.6, yy + bw * 0.5);
+    ctx.stroke();
+    ctx.strokeStyle = 'rgba(118,98,68,0.26)';
+    ctx.beginPath();
+    ctx.moveTo(x + w - bw * 0.5, yy);
+    ctx.lineTo(x + w - bw * 0.5, yy + fh - r * 0.6);
+    ctx.quadraticCurveTo(x + w - bw * 0.5, yy + fh - bw * 0.5, x + w - r * 0.6, yy + fh - bw * 0.5);
+    ctx.lineTo(x + r * 0.6, yy + fh - bw * 0.5);
+    ctx.stroke();
+    ctx.restore();
+
     // ---- 边框 ----
-    ctx.strokeStyle = hi ? '#ffd76a' : (face ? 'rgba(120,104,74,0.40)' : 'rgba(232,196,106,0.28)');
+    ctx.strokeStyle = hi ? '#ffd76a' : 'rgba(120,104,74,0.40)';
     ctx.lineWidth = hi ? Math.max(1.8, m * 0.048) : Math.max(0.8, m * 0.016);
     roundRect(x, yy, w, fh, r);
     ctx.stroke();
 
-    if (!face) {
-      // 牌背花纹
-      ctx.strokeStyle = 'rgba(232,196,106,0.16)';
-      ctx.lineWidth = Math.max(0.8, m * 0.02);
-      roundRect(x + w * 0.16, yy + fh * 0.14, w * 0.68, fh * 0.72, r * 0.8);
-      ctx.stroke();
-      return;
-    }
+
 
     const suit = T.suitOf(t);
     const num = T.numOf(t);
@@ -1131,12 +1148,165 @@
     }
 
     ctx.restore();
+    if (opts.shade > 0) shadeTile(x, yy, w, h, opts.shade);
   }
 
-  // 画牌背
-  // 画牌背（同样带厚度与投影）
-  function drawTileBack(x, y, w, h) {
-    drawTile(0, x, y, w, h, { face: false });
+  /* 给某块牌压一层明暗：shade 0~0.5，越大越暗（伪景深 + 灯光衰减） */
+  function shadeTile(x, y, w, h, shade) {
+    const a = Math.min(0.5, Math.max(0, shade));
+    if (a <= 0.001) return;
+    ctx.save();
+    const g = ctx.createLinearGradient(x, y, x, y + h);
+    g.addColorStop(0, 'rgba(4,16,11,' + (a * 0.85).toFixed(3) + ')');
+    g.addColorStop(1, 'rgba(2,10,7,' + a.toFixed(3) + ')');
+    ctx.fillStyle = g;
+    roundRect(x, y, w, h, Math.max(2.0, Math.min(w, h) * 0.09));
+    ctx.fill();
+    ctx.restore();
+  }
+
+  /* ---------------- 牌背 ----------------
+   * 牌背是「别人手里的牌」，一张张立着排一圈，最需要立体感：
+   * 侧面厚度 + 内凹面板 + 防滑斜纹 + 金线 + 四角钉 + 顶光。 */
+  function drawTileBack(x, y, w, h, opts) {
+    opts = opts || {};
+    const m = Math.min(w, h);
+    const r = Math.max(2.0, m * 0.095);
+    const ps = Math.max(1.6, Math.min(h * 0.10, m * 0.15));   // 侧面厚
+    const fh = h - ps;
+    const big = m >= 20;                                       // 小牌省掉细节，别糊成一团
+
+    // ---- 投影 ----
+    ctx.fillStyle = 'rgba(3,14,9,0.28)';
+    roundRect(x + 1.5, y + ps * 0.85 + 1.4, w, h - ps * 0.55, r);
+    ctx.fill();
+
+    // ---- 侧面：上浅下深，底缘再压一道暗线 ----
+    const gs = ctx.createLinearGradient(x, y + ps * 0.5, x, y + h);
+    gs.addColorStop(0, '#2b6141');
+    gs.addColorStop(0.5, '#1b4a2f');
+    gs.addColorStop(1, '#0a2216');
+    ctx.fillStyle = gs;
+    roundRect(x, y + ps * 0.5, w, h - ps * 0.5, r);
+    ctx.fill();
+    ctx.strokeStyle = 'rgba(0,0,0,0.34)';
+    ctx.lineWidth = Math.max(0.8, m * 0.022);
+    ctx.beginPath();
+    ctx.moveTo(x + r * 0.8, y + h - ps * 0.18);
+    ctx.lineTo(x + w - r * 0.8, y + h - ps * 0.18);
+    ctx.stroke();
+
+    // ---- 顶面（牌背的正面）----
+    const g = ctx.createLinearGradient(x, y, x + w * 0.55, y + fh);
+    g.addColorStop(0, '#3f8459');
+    g.addColorStop(0.42, '#2e6c47');
+    g.addColorStop(0.78, '#1f5233');
+    g.addColorStop(1, '#173f26');
+    ctx.fillStyle = g;
+    roundRect(x, y, w, fh, r);
+    ctx.fill();
+
+    // ---- 顶光 + 底部暗角 ----
+    ctx.save();
+    roundRect(x, y, w, fh, r);
+    ctx.clip();
+    const gl = ctx.createLinearGradient(x, y, x, y + fh * 0.5);
+    gl.addColorStop(0, 'rgba(186,255,214,0.22)');
+    gl.addColorStop(1, 'rgba(186,255,214,0)');
+    ctx.fillStyle = gl;
+    ctx.fillRect(x, y, w, fh * 0.5);
+    const gd = ctx.createLinearGradient(x, y + fh * 0.72, x, y + fh);
+    gd.addColorStop(0, 'rgba(0,0,0,0)');
+    gd.addColorStop(1, 'rgba(0,0,0,0.30)');
+    ctx.fillStyle = gd;
+    ctx.fillRect(x, y + fh * 0.72, w, fh * 0.28);
+
+    if (big) {
+      // ---- 内凹面板：一圈亮边 + 一圈暗边，看起来是凹下去的 ----
+      const px = w * 0.155, py = fh * 0.125;
+      const ix = x + px, iy = y + py, iw = w - px * 2, ih = fh - py * 2;
+      const ir = Math.max(1.5, r * 0.9);
+      const gp = ctx.createLinearGradient(ix, iy, ix, iy + ih);
+      gp.addColorStop(0, 'rgba(6,34,21,0.30)');
+      gp.addColorStop(1, 'rgba(52,124,80,0.16)');
+      ctx.fillStyle = gp;
+      roundRect(ix, iy, iw, ih, ir);
+      ctx.fill();
+
+      // 斜纹：两组细线，模拟防滑纹
+      ctx.save();
+      roundRect(ix, iy, iw, ih, ir);
+      ctx.clip();
+      ctx.strokeStyle = 'rgba(190,240,205,0.10)';
+      ctx.lineWidth = Math.max(0.6, m * 0.014);
+      const stepA = Math.max(3.2, iw * 0.09);
+      for (let k = -ih; k < iw + ih; k += stepA) {
+        ctx.beginPath();
+        ctx.moveTo(ix + k, iy);
+        ctx.lineTo(ix + k - ih, iy + ih);
+        ctx.stroke();
+      }
+      ctx.strokeStyle = 'rgba(0,0,0,0.10)';
+      for (let k = -ih; k < iw + ih; k += stepA) {
+        ctx.beginPath();
+        ctx.moveTo(ix + k + stepA * 0.5, iy);
+        ctx.lineTo(ix + k + stepA * 0.5 - ih, iy + ih);
+        ctx.stroke();
+      }
+      ctx.restore();
+
+      // 面板金线
+      ctx.strokeStyle = 'rgba(232,196,106,0.34)';
+      ctx.lineWidth = Math.max(0.7, m * 0.014);
+      roundRect(ix, iy, iw, ih, ir);
+      ctx.stroke();
+
+      // 中央小菱形
+      const ccx = x + w / 2, ccy = y + fh / 2, ds = Math.min(iw, ih) * 0.20;
+      ctx.strokeStyle = 'rgba(232,196,106,0.52)';
+      ctx.lineWidth = Math.max(0.7, m * 0.016);
+      ctx.beginPath();
+      ctx.moveTo(ccx, ccy - ds);
+      ctx.lineTo(ccx + ds, ccy);
+      ctx.lineTo(ccx, ccy + ds);
+      ctx.lineTo(ccx - ds, ccy);
+      ctx.closePath();
+      ctx.stroke();
+      ctx.fillStyle = 'rgba(232,196,106,0.30)';
+      ctx.beginPath();
+      ctx.arc(ccx, ccy, Math.max(0.9, ds * 0.26), 0, Math.PI * 2);
+      ctx.fill();
+    }
+    ctx.restore();
+
+    // ---- 倒角棱线 ----
+    ctx.save();
+    roundRect(x, y, w, fh, r);
+    ctx.clip();
+    ctx.lineWidth = Math.max(1, m * 0.028);
+    ctx.strokeStyle = 'rgba(198,255,224,0.30)';
+    ctx.beginPath();
+    ctx.moveTo(x + 1, y + fh);
+    ctx.lineTo(x + 1, y + r * 0.7);
+    ctx.lineTo(x + r * 0.7, y + 1);
+    ctx.lineTo(x + w - r * 0.7, y + 1);
+    ctx.stroke();
+    ctx.strokeStyle = 'rgba(0,0,0,0.30)';
+    ctx.beginPath();
+    ctx.moveTo(x + w - 1, y);
+    ctx.lineTo(x + w - 1, y + fh - r * 0.7);
+    ctx.lineTo(x + w - r * 0.7, y + fh - 1);
+    ctx.lineTo(x + r * 0.7, y + fh - 1);
+    ctx.stroke();
+    ctx.restore();
+
+    // ---- 外框金线 ----
+    ctx.strokeStyle = opts.highlight ? '#ffd76a' : 'rgba(232,196,106,0.34)';
+    ctx.lineWidth = opts.highlight ? Math.max(1.6, m * 0.05) : Math.max(0.8, m * 0.018);
+    roundRect(x, y, w, fh, r);
+    ctx.stroke();
+
+    if (opts.shade > 0) shadeTile(x, y, w, h, opts.shade);
   }
 
   var TEXTLOG = [];   // 本帧绘制过的文字（版面自检用，标题页有没有挤在一起）
@@ -2139,12 +2309,19 @@
     // 手牌（先画牌背，名字牌稍后画在上层，避免被牌挡掉——之前左右两家的名字就是这么消失的）
     const n = pl.hand.length;
     const totalW = n * (tw + gap) - gap;
+    const baseShade = side === 'top' ? 0.05 : 0.13;
     if (side === 'top') {
       let x = cx - totalW / 2;
-      for (let i = 0; i < n; i++) { drawTileBack(x, cy, tw, th); x += tw + gap; }
+      for (let i = 0; i < n; i++) {
+        drawTileBack(x, cy, tw, th, { shade: baseShade + (i % 2) * 0.012 });
+        x += tw + gap;
+      }
     } else {
       let y = cy - totalW / 2;
-      for (let i = 0; i < n; i++) { drawTileBack(cx - th / 2, y, th, tw); y += tw + gap; }
+      for (let i = 0; i < n; i++) {
+        drawTileBack(cx - th / 2, y, th, tw, { shade: baseShade + (i % 2) * 0.018 });
+        y += tw + gap;
+      }
     }
 
     // 副露（正面朝上，让大家看到）
@@ -2190,11 +2367,12 @@
       let oy = cy + th + 8;
       ox = Math.max(120, Math.min(ox, VW - 26 - stripW));
       oy = Math.max(26, Math.min(oy, VH - 26 - stripH));
+      const msh = side === 'top' ? 0.05 : 0.11;
       for (let i = 0; i < cells.length; i++) {
         if (cells[i] == null) continue;
         const rx = ox + (i % PER_ROW) * step;
         const ry = oy + Math.floor(i / PER_ROW) * (mh + 3);
-        drawTile(cells[i], rx, ry, mw, mh, {});
+        drawTile(cells[i], rx, ry, mw, mh, { shade: msh });
         meldHit.push({ x: rx, y: ry, w: mw, h: mh, player: p, kind: 'meld' });
       }
       return;
@@ -2208,11 +2386,12 @@
     const ox = side === 'left' ? cx + th / 2 + 10 : cx - th / 2 - 10 - stripW;
     let oy = cy + 40;
     oy = Math.max(150, Math.min(oy, VH - 26 - stripH));
+    const mshV = 0.12;
     for (let i = 0; i < cells.length; i++) {
       if (cells[i] == null) continue;
       const rx = ox + Math.floor(i / PER_COL) * (mh + 4);
       const ry = oy + (i % PER_COL) * step;
-      drawTile(cells[i], rx, ry, mh, mw, {});
+      drawTile(cells[i], rx, ry, mh, mw, { shade: mshV });
       meldHit.push({ x: rx, y: ry, w: mh, h: mw, player: p, kind: 'meld' });
     }
   }
@@ -2239,7 +2418,8 @@
         } else {
           rx = s.x + row * (dh + 3); ry = s.y + col * (dw + 3); rw = dh; rh = dw;
         }
-        drawTile(pl.discards[i], rx, ry, rw, rh, { highlight: isLast });
+        const dsh = (p === 0 ? 0.02 : (p === 2 ? 0.13 : 0.10)) + row * 0.022;
+        drawTile(pl.discards[i], rx, ry, rw, rh, { highlight: isLast, shade: dsh });
         discardHit.push({ x: rx, y: ry, w: rw, h: rh, player: p });
       }
     }
