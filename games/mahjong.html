@@ -1168,6 +1168,16 @@
   /* ---------------- 牌背 ----------------
    * 牌背是「别人手里的牌」，一张张立着排一圈，最需要立体感：
    * 侧面厚度 + 内凹面板 + 防滑斜纹 + 金线 + 四角钉 + 顶光。 */
+  // 侧家（左右两家）的牌在桌上是转 90° 摆的：先转坐标系，再按牌的原始比例画，
+  // 否则把宽高对调硬画出去，字会被横向拉扁、图案比例全错。
+  function drawTileRot(t, cx, cy, w, h, rot, opts) {
+    ctx.save();
+    ctx.translate(cx, cy);
+    ctx.rotate(rot);
+    drawTile(t, -w / 2, -h / 2, w, h, opts || {});
+    ctx.restore();
+  }
+
   function drawTileBack(x, y, w, h, opts) {
     opts = opts || {};
     const m = Math.min(w, h);
@@ -2391,7 +2401,8 @@
       if (cells[i] == null) continue;
       const rx = ox + Math.floor(i / PER_COL) * (mh + 4);
       const ry = oy + (i % PER_COL) * step;
-      drawTile(cells[i], rx, ry, mh, mw, { shade: mshV });
+      const vrot = side === 'left' ? -Math.PI / 2 : Math.PI / 2;
+      drawTileRot(cells[i], rx + mh / 2, ry + mw / 2, mw, mh, vrot, { shade: mshV });
       meldHit.push({ x: rx, y: ry, w: mh, h: mw, player: p, kind: 'meld' });
     }
   }
@@ -2419,7 +2430,13 @@
           rx = s.x + row * (dh + 3); ry = s.y + col * (dw + 3); rw = dh; rh = dw;
         }
         const dsh = (p === 0 ? 0.02 : (p === 2 ? 0.13 : 0.10)) + row * 0.022;
-        drawTile(pl.discards[i], rx, ry, rw, rh, { highlight: isLast, shade: dsh });
+        if (s.dir === 'h') {
+          drawTile(pl.discards[i], rx, ry, rw, rh, { highlight: isLast, shade: dsh });
+        } else {
+          // 左家 -90°、右家 +90°：牌头朝向自己那一侧，和真人码牌一致
+          const rot = p === 3 ? -Math.PI / 2 : Math.PI / 2;
+          drawTileRot(pl.discards[i], rx + rw / 2, ry + rh / 2, dw, dh, rot, { highlight: isLast, shade: dsh });
+        }
         discardHit.push({ x: rx, y: ry, w: rw, h: rh, player: p });
       }
     }
