@@ -227,10 +227,17 @@
     }
     for (const p of players) sortHand(p.hand);
 
+    // 掷骰定庄：两颗骰子的点数和决定庄家（和 1/5/9 是自己，2/6/10 是下家…）
+    const R = typeof rnd === 'function' ? rnd : Math.random;
+    const dice = [1 + Math.floor(R() * 6), 1 + Math.floor(R() * 6)];
+    const dealer = (dice[0] + dice[1] - 1) % 4;
+
     return {
       wall: wall,
       players: players,
-      turn: 0,
+      dice: dice,
+      dealer: dealer,
+      turn: dealer,
       phase: 'playing',        // playing | over
       lastDiscard: null,       // { tile, from }
       pendingClaim: null,      // { from, tile, options:[seat...], asked:[...] }
@@ -438,6 +445,9 @@
       seat: seat,
       phase: g.phase,
       turn: g.turn,
+      dice: g.dice,
+      dealer: g.dealer,
+      roundNo: g.roundNo,
       waitingFor: g.phase === 'playing' ? (claim ? 'claim' : (g.turn === seat ? 'me' : 'other')) : 'none',
       wallLeft: g.wall.length,
       lastDiscard: g.lastDiscard,

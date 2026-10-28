@@ -134,12 +134,42 @@ console.log('\n3) 联机可见性：手牌只发给本人');
   }
 }
 
+console.log('\n4.5) 掷骰定庄：骰子点数决定庄家');
+{
+  let diceOk = 0, dealerOk = 0, turnOk = 0, viewOk = 0;
+  for (let i = 0; i < 200; i++) {
+    const g = Core.createRound([
+      { id: 'a', name: 'A' }, { id: 'b', name: 'B' }, { id: 'c', name: 'C' }, { id: 'd', name: 'D' }
+    ]);
+    if (Array.isArray(g.dice) && g.dice.length === 2 &&
+        g.dice.every(function (d) { return d >= 1 && d <= 6; })) diceOk++;
+    if (g.dealer === (g.dice[0] + g.dice[1] - 1) % 4) dealerOk++;
+    if (g.turn === g.dealer) turnOk++;
+    const v = Core.viewFor(g, 0);
+    if (v.dice && v.dice.join(',') === g.dice.join(',') && v.dealer === g.dealer &&
+        typeof v.roundNo === 'number') viewOk++;
+  }
+  ok(diceOk === 200, '每局都掷出两颗 1-6 的骰子（' + diceOk + '/200）');
+  ok(dealerOk === 200, '庄家 = (骰1 + 骰2 - 1) % 4（' + dealerOk + '/200）');
+  ok(turnOk === 200, '开局轮到庄家（' + turnOk + '/200）');
+  ok(viewOk === 200, '视图里带了 dice / dealer / roundNo（' + viewOk + '/200）');
+
+  // 同一副骰子下，庄家座位的说法也要跟着变
+  const g2 = Core.createRound([
+    { id: 'a', name: 'A' }, { id: 'b', name: 'B' }, { id: 'c', name: 'C' }, { id: 'd', name: 'D' }
+  ], function () { return 0; });   // 洗牌也吃 rnd，这里用恒 0 的随机源
+  ok(g2.dice.length === 2 && g2.dice.every(function (d) { return d >= 1 && d <= 6; }) &&
+     g2.dealer === (g2.dice[0] + g2.dice[1] - 1) % 4 && g2.turn === g2.dealer,
+     '注入固定随机源时骰子与庄家仍然自洽（' + g2.dice.join(',') + ' → 座位 ' + g2.dealer + '）');
+}
+
 console.log('\n4) 动作校验：越权/乱来要被拒绝');
 {
   for (let round = 0; round < 20; round++) {
     const g = Core.createRound([
       { id: 'a', name: 'A' }, { id: 'b', name: 'B' }, { id: 'c', name: 'C' }, { id: 'd', name: 'D' }
     ]);
+    g.turn = 0;          // 骰子定庄是随机的，这里固定让座位 0 先出牌
     Core.beginTurn(g);   // 座位 0 摸牌后轮到它出牌
     const before = g.players[0].hand.length + g.players[0].discards.length;
 

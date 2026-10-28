@@ -256,12 +256,16 @@
     };
   }
 
-  function resetGame() {
+    // 掷骰定庄后重置一局（dice 可指定，用于动画与发牌保持一致）
+  function resetGame(dice) {
     G.wall = shuffle(makeWall());
     G.players = [0, 1, 2, 3].map(mkPlayer);
-    G.turn = 0;
+
+    const d = (dice && dice.length === 2) ? dice.slice() : rollDice();
+    G.dice = d;
+    G.dealer = (d[0] + d[1] - 1) % 4;   // 两颗骰子的点数和决定谁坐庄
+    G.turn = G.dealer;
     G.phase = 'playing';
-    G.dealer = 0;
     G.lastDiscard = null;
     G.pendingClaim = null;
     G.winner = null;
@@ -275,27 +279,33 @@
     }
     for (const p of G.players) sortHand(p.hand);
     G.wallLeft = G.wall.length;
-    G.waitingFor = 'discard';
-    // 庄家先摸
-    drawFor(0);
 
-    // 开局先检查一次天胡，再决定谁行动
-    if (canWin(G.players[0].hand, G.players[0].melds.length)) {
-      G.waitingFor = 'discard';
-      pushLog('开局就成型，可以自摸！');
-    } else if (canWin(G.players[1].hand, 0) || canWin(G.players[2].hand, 0) || canWin(G.players[3].hand, 0)) {
-      // 电脑天胡：直接让它胡
+    // 庄家多摸一张
+    drawFor(G.dealer);
+
+    // 天胡检查（庄家优先）
+    if (canWin(G.players[G.dealer].hand, G.players[G.dealer].melds.length)) {
+      if (G.dealer === 0) {
+        G.waitingFor = 'discard';
+        pushLog('开局就成型，可以自摸！');
+      } else {
+        declareWin(G.dealer, G.players[G.dealer].hand[G.players[G.dealer].hand.length - 1], 0, true);
+        return;
+      }
+    } else {
       for (let p = 1; p <= 3; p++) {
+        if (p === G.dealer) continue;
         if (canWin(G.players[p].hand, G.players[p].melds.length)) {
           declareWin(p, G.players[p].hand[G.players[p].hand.length - 1], 0, true);
           return;
         }
       }
       G.waitingFor = 'discard';
-    } else {
-      G.waitingFor = 'discard';
     }
-    pushLog('开局，你坐东位。');
+
+    // 不是自己坐庄，就等电脑先出牌
+    if (G.turn !== 0) G.waitingFor = 'ai';
+    pushLog('掷骰 ' + d[0] + ' + ' + d[1] + ' = ' + (d[0] + d[1]) + ' 点，' + SEAT_NAMES[G.dealer] + '坐庄。');
   }
 
   function shuffle(a) {
@@ -824,7 +834,7 @@
 
   // 牌面尺寸
   // 构建标记：用于确认浏览器实际加载的是哪一版（部署漏传 / 缓存排查用）
-  const BUILD = '2026-10-28 #6';
+  const BUILD = '2026-10-29 #7';
 
   const TW = 56, TH = 76;         // 竖着的牌（手牌/牌河）—— 2026-10-26 放大，手牌更好认
   const TD = 0.30;                // 牌的「厚度」比率（用于侧向牌）
@@ -983,47 +993,94 @@
   }
 
   // 画一张立牌。vertical=true 表示牌面朝上竖放
+  // 一张牌（立体：顶面 + 侧面厚度 + 投影 + 浮雕图案）
+  // 注意：整体仍然只占 w×h 的格子，侧面画在格子内部，避免放大后把版式挤歪
   function drawTile(t, x, y, w, h, opts) {
     opts = opts || {};
     const face = opts.face !== false;
     const hi = opts.highlight;
+    const lift = opts.lift || 0;          // 摸到手的那张会抬起来
+    const yy = y - lift;
+    const m = Math.min(w, h);
+    const r = Math.max(2.5, m * 0.10);
+    const side = Math.max(2, Math.min(h * 0.09, m * 0.14));
+    const fh = h - side;                  // 顶面高度
 
-    // 牌身（象牙白）
-    const g = ctx.createLinearGradient(x, y, x, y + h);
-    if (face) {
-      g.addColorStop(0, '#fdfbf3');
-      g.addColorStop(1, '#e6e0cd');
-    } else {
-      g.addColorStop(0, '#2f6b45');
-      g.addColorStop(1, '#1d4a2e');
-    }
-    ctx.fillStyle = g;
-    roundRect(x, y, w, h, 5);
+    // ---- 投影：抬得越高影子越远越淡 ----
+    ctx.fillStyle = lift > 0 ? 'rgba(3,14,9,0.32)' : 'rgba(3,14,9,0.22)';
+    roundRect(x + 1.4 + lift * 0.30, yy + side * 0.9 + 1.2 + lift * 0.55, w, h - side * 0.6, r);
     ctx.fill();
 
-    // 边框
-    ctx.strokeStyle = hi ? '#ffd76a' : 'rgba(90, 80, 60, 0.35)';
-    ctx.lineWidth = hi ? 2.4 : 1;
-    roundRect(x, y, w, h, 5);
+    // ---- 侧面（象牙色的切面，立体的关键）----
+    const gs = ctx.createLinearGradient(x, yy + side, x, yy + h);
+    if (face) { gs.addColorStop(0, '#dbd1b6'); gs.addColorStop(1, '#a89e85'); }
+    else { gs.addColorStop(0, '#1b4a2c'); gs.addColorStop(1, '#0b2416'); }
+    ctx.fillStyle = gs;
+    roundRect(x, yy + side * 0.55, w, h - side * 0.55, r);
+    ctx.fill();
+
+    // ---- 顶面 ----
+    const g = ctx.createLinearGradient(x, yy, x + w * 0.72, yy + fh);
+    if (face) {
+      g.addColorStop(0, '#fffdf6');
+      g.addColorStop(0.52, '#f8f3e3');
+      g.addColorStop(1, '#e4ddc8');
+    } else {
+      g.addColorStop(0, '#357a50');
+      g.addColorStop(0.58, '#28603d');
+      g.addColorStop(1, '#1a4629');
+    }
+    ctx.fillStyle = g;
+    roundRect(x, yy, w, fh, r);
+    ctx.fill();
+
+    // ---- 顶面高光 / 底缘暗角 ----
+    ctx.save();
+    roundRect(x, yy, w, fh, r);
+    ctx.clip();
+    const gl = ctx.createLinearGradient(x, yy, x, yy + fh * 0.42);
+    gl.addColorStop(0, face ? 'rgba(255,255,255,0.90)' : 'rgba(170,255,200,0.14)');
+    gl.addColorStop(1, 'rgba(255,255,255,0)');
+    ctx.fillStyle = gl;
+    ctx.fillRect(x, yy, w, fh * 0.42);
+    const gd = ctx.createLinearGradient(x, yy + fh * 0.76, x, yy + fh);
+    gd.addColorStop(0, 'rgba(120,100,70,0)');
+    gd.addColorStop(1, face ? 'rgba(120,100,70,0.20)' : 'rgba(0,0,0,0.32)');
+    ctx.fillStyle = gd;
+    ctx.fillRect(x, yy + fh * 0.76, w, fh * 0.24);
+    ctx.restore();
+
+    // ---- 边框 ----
+    ctx.strokeStyle = hi ? '#ffd76a' : (face ? 'rgba(120,104,74,0.40)' : 'rgba(232,196,106,0.28)');
+    ctx.lineWidth = hi ? Math.max(1.8, m * 0.048) : Math.max(0.8, m * 0.016);
+    roundRect(x, yy, w, fh, r);
     ctx.stroke();
 
-    if (!face) return;
+    if (!face) {
+      // 牌背花纹
+      ctx.strokeStyle = 'rgba(232,196,106,0.16)';
+      ctx.lineWidth = Math.max(0.8, m * 0.02);
+      roundRect(x + w * 0.16, yy + fh * 0.14, w * 0.68, fh * 0.72, r * 0.8);
+      ctx.stroke();
+      return;
+    }
 
     const suit = T.suitOf(t);
     const num = T.numOf(t);
 
-    // 底部一点点厚度感，让牌看起来是立体的
-    ctx.fillStyle = 'rgba(120,105,80,0.16)';
-    roundRect(x + 1.4, y + h - h * 0.105, w - 2.8, h * 0.085, 3);
-    ctx.fill();
-
-    // 内区
-    const padX = w * 0.13, padY = h * 0.10;
-    const ix = x + padX, iy = y + padY, iw = w - padX * 2, ih = h - padY * 2;
+    const padX = w * 0.13, padY = fh * 0.10;
+    const ix = x + padX, iy = yy + padY, iw = w - padX * 2, ih = fh - padY * 2;
 
     ctx.save();
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
+    // 浮雕效果：给图案加一层向右下的白色投影，看起来像刻进象牙里
+    if (m >= 18) {
+      ctx.shadowColor = 'rgba(255,255,255,0.78)';
+      ctx.shadowOffsetX = Math.max(0.6, m * 0.013);
+      ctx.shadowOffsetY = Math.max(0.9, m * 0.02);
+      ctx.shadowBlur = 0;
+    }
 
     if (suit === 'honor') {
       const glyph = TILE_GLYPH[HONORS[t - 31]] || '?';
@@ -1031,36 +1088,36 @@
         // 白板：空心双框
         ctx.strokeStyle = INK_BLUE;
         ctx.lineWidth = Math.max(1.2, w * 0.05);
-        roundRect(x + w * 0.20, y + h * 0.15, w * 0.60, h * 0.70, w * 0.07);
+        roundRect(x + w * 0.20, yy + fh * 0.15, w * 0.60, fh * 0.70, w * 0.07);
         ctx.stroke();
         ctx.strokeStyle = 'rgba(42,85,128,0.42)';
         ctx.lineWidth = Math.max(0.8, w * 0.022);
-        roundRect(x + w * 0.27, y + h * 0.23, w * 0.46, h * 0.54, w * 0.05);
+        roundRect(x + w * 0.27, yy + fh * 0.23, w * 0.46, fh * 0.54, w * 0.05);
         ctx.stroke();
       } else {
         ctx.fillStyle = glyph === '中' ? INK_RED : (glyph === '發' ? INK_GREEN : INK);
         ctx.font = '700 ' + Math.round(w * 0.76) + 'px "PingFang SC","Microsoft YaHei","SimSun",serif';
-        ctx.fillText(glyph, x + w / 2, y + h / 2 + h * 0.015);
+        ctx.fillText(glyph, x + w / 2, yy + fh / 2 + fh * 0.015);
       }
     } else if (suit === 'wan') {
-      // 汉字数字 + 红「萬」（跟真牌一样：上数字下萬）
+      // 汉字数字 + 红「萬」
       ctx.fillStyle = INK;
       ctx.font = '700 ' + Math.round(w * 0.46) + 'px "PingFang SC","Microsoft YaHei","SimSun",serif';
-      ctx.fillText(NUM_CN[num], x + w / 2, y + h * 0.31);
+      ctx.fillText(NUM_CN[num], x + w / 2, yy + fh * 0.31);
       ctx.fillStyle = INK_RED;
       ctx.font = '700 ' + Math.round(w * 0.44) + 'px "PingFang SC","Microsoft YaHei","SimSun",serif';
-      ctx.fillText('萬', x + w / 2, y + h * 0.71);
+      ctx.fillText('萬', x + w / 2, yy + fh * 0.71);
     } else if (suit === 'tong') {
       const pos = PIP_POS[num] || [];
       const gap = minSpacing(pos, iw, ih);
-      const r = Math.max(1.6, Math.min(gap * 0.42, ih * 0.17)) * (num === 1 ? 1.35 : 1);
+      const rad = Math.max(1.6, Math.min(gap * 0.42, ih * 0.17)) * (num === 1 ? 1.35 : 1);
       for (let i = 0; i < pos.length; i++) {
-        drawDot(ix + pos[i][0] * iw, iy + pos[i][1] * ih, r, dotColor(num, i));
+        drawDot(ix + pos[i][0] * iw, iy + pos[i][1] * ih, rad, dotColor(num, i));
       }
     } else {
       // 条子
       if (num === 1) {
-        drawBird(x + w / 2, y + h / 2, Math.min(w, h) * 0.29);
+        drawBird(x + w / 2, yy + fh / 2, Math.min(w, fh) * 0.29);
       } else {
         const pos = STICK_POS[num] || [];
         const gap = minSpacing(pos, iw, ih);
@@ -1077,20 +1134,9 @@
   }
 
   // 画牌背
+  // 画牌背（同样带厚度与投影）
   function drawTileBack(x, y, w, h) {
-    const g = ctx.createLinearGradient(x, y, x, y + h);
-    g.addColorStop(0, '#2f6b45');
-    g.addColorStop(1, '#1b4429');
-    ctx.fillStyle = g;
-    roundRect(x, y, w, h, 5);
-    ctx.fill();
-    ctx.strokeStyle = 'rgba(232, 196, 106, 0.28)';
-    ctx.lineWidth = 1;
-    roundRect(x, y, w, h, 5);
-    ctx.stroke();
-    ctx.fillStyle = 'rgba(232, 196, 106, 0.16)';
-    roundRect(x + w * 0.22, y + h * 0.16, w * 0.56, h * 0.68, 3);
-    ctx.fill();
+    drawTile(0, x, y, w, h, { face: false });
   }
 
   var TEXTLOG = [];   // 本帧绘制过的文字（版面自检用，标题页有没有挤在一起）
@@ -1526,9 +1572,483 @@
     }
   }
 
+/* ============================================================
+   *  九、牌桌背景 / 骰子 / 开场动画（洗牌 · 砌墙 · 掷骰 · 发牌）
+   * ============================================================ */
+
+  // 整块背景：木框 + 绒布 + 桌沿 + 暗角，牌桌成了“场景”而不只是块绿布
+  function drawTableBase() {
+    // 木质后景（铺满整个画面）
+    const wg = ctx.createLinearGradient(0, 0, 0, VH);
+    wg.addColorStop(0, '#2b1b12');
+    wg.addColorStop(0.45, '#3b2517');
+    wg.addColorStop(1, '#180f09');
+    ctx.fillStyle = wg;
+    ctx.fillRect(0, 0, VW, VH);
+
+    // 木纹
+    ctx.save();
+    ctx.lineWidth = 2;
+    for (let i = 0; i < 16; i++) {
+      const yy = 4 + i * (VH / 15) + Math.sin(i * 1.7) * 4;
+      ctx.strokeStyle = 'rgba(150,100,54,' + (0.06 + (i % 3) * 0.028) + ')';
+      ctx.beginPath();
+      ctx.moveTo(-10, yy);
+      ctx.bezierCurveTo(VW * 0.32, yy + 7, VW * 0.68, yy - 8, VW + 10, yy + 4);
+      ctx.stroke();
+    }
+    ctx.restore();
+
+    // 桌沿（外金边 + 内暗边）
+    ctx.save();
+    roundRect(8, 8, VW - 16, VH - 16, 32);
+    ctx.strokeStyle = 'rgba(206,164,96,0.50)';
+    ctx.lineWidth = 5;
+    ctx.stroke();
+    roundRect(16, 16, VW - 32, VH - 32, 28);
+    ctx.strokeStyle = 'rgba(255,226,160,0.16)';
+    ctx.lineWidth = 2;
+    ctx.stroke();
+    ctx.restore();
+
+    // 绒布
+    const g = ctx.createRadialGradient(VW / 2, VH * 0.46, 40, VW / 2, VH * 0.46, VW * 0.62);
+    g.addColorStop(0, '#215834');
+    g.addColorStop(0.58, '#153c25');
+    g.addColorStop(1, '#0a2015');
+    ctx.fillStyle = g;
+    roundRect(24, 24, VW - 48, VH - 48, 26);
+    ctx.fill();
+
+    // 绒布内阴影（上缘压暗，像有桌沿挡着光）
+    ctx.save();
+    roundRect(24, 24, VW - 48, VH - 48, 26);
+    ctx.clip();
+    const sh = ctx.createLinearGradient(0, 24, 0, 24 + VH * 0.18);
+    sh.addColorStop(0, 'rgba(0,0,0,0.42)');
+    sh.addColorStop(1, 'rgba(0,0,0,0)');
+    ctx.fillStyle = sh;
+    ctx.fillRect(24, 24, VW - 48, VH * 0.18);
+    const sh2 = ctx.createLinearGradient(0, VH - 24 - VH * 0.14, 0, VH - 24);
+    sh2.addColorStop(0, 'rgba(0,0,0,0)');
+    sh2.addColorStop(1, 'rgba(0,0,0,0.30)');
+    ctx.fillStyle = sh2;
+    ctx.fillRect(24, VH - 24 - VH * 0.14, VW - 48, VH * 0.14);
+    ctx.restore();
+
+    // 金线内框 + 四角包角
+    ctx.save();
+    ctx.strokeStyle = 'rgba(232,196,106,0.20)';
+    ctx.lineWidth = 2;
+    roundRect(38, 38, VW - 76, VH - 76, 20);
+    ctx.stroke();
+    ctx.strokeStyle = 'rgba(232,196,106,0.42)';
+    ctx.lineWidth = 3;
+    const cnr = 46;
+    [[38, 38, 1, 1], [VW - 38, 38, -1, 1], [38, VH - 38, 1, -1], [VW - 38, VH - 38, -1, -1]].forEach(function (c) {
+      ctx.beginPath();
+      ctx.moveTo(c[0] + c[2] * cnr, c[1]);
+      ctx.lineTo(c[0], c[1]);
+      ctx.lineTo(c[0], c[1] + c[3] * cnr);
+      ctx.stroke();
+    });
+    ctx.restore();
+
+    // 中央极淡的圆形徽记
+    ctx.save();
+    ctx.globalAlpha = 0.07;
+    ctx.strokeStyle = '#e8d7a2';
+    ctx.lineWidth = 3;
+    ctx.beginPath(); ctx.arc(VW / 2, VH * 0.47, 150, 0, Math.PI * 2); ctx.stroke();
+    ctx.lineWidth = 1.5;
+    ctx.beginPath(); ctx.arc(VW / 2, VH * 0.47, 128, 0, Math.PI * 2); ctx.stroke();
+    for (let i = 0; i < 4; i++) {
+      const a = i * Math.PI / 2 + Math.PI / 4;
+      ctx.beginPath();
+      ctx.arc(VW / 2 + Math.cos(a) * 139, VH * 0.47 + Math.sin(a) * 139, 9, 0, Math.PI * 2);
+      ctx.stroke();
+    }
+    ctx.restore();
+
+    // 暗角
+    const vg = ctx.createRadialGradient(VW / 2, VH / 2, VH * 0.42, VW / 2, VH / 2, VH * 0.95);
+    vg.addColorStop(0, 'rgba(0,0,0,0)');
+    vg.addColorStop(1, 'rgba(0,0,0,0.55)');
+    ctx.fillStyle = vg;
+    ctx.fillRect(0, 0, VW, VH);
+  }
+
+  /* ---------------- 骰子 ---------------- */
+
+  var DICE_FACE = [
+    [],
+    [[0.5, 0.5]],
+    [[0.29, 0.29], [0.71, 0.71]],
+    [[0.29, 0.29], [0.5, 0.5], [0.71, 0.71]],
+    [[0.29, 0.29], [0.71, 0.29], [0.29, 0.71], [0.71, 0.71]],
+    [[0.29, 0.29], [0.71, 0.29], [0.5, 0.5], [0.29, 0.71], [0.71, 0.71]],
+    [[0.29, 0.24], [0.71, 0.24], [0.29, 0.5], [0.71, 0.5], [0.29, 0.76], [0.71, 0.76]]
+  ];
+
+  function rollDice() {
+    return [1 + Math.floor(Math.random() * 6), 1 + Math.floor(Math.random() * 6)];
+  }
+
+  // 单颗骰子（正面 + 一点侧面厚度 + 投影 + 点数，带高光）
+  function drawDie(cx, cy, s, v, rot, alpha) {
+    ctx.save();
+    if (alpha != null) ctx.globalAlpha = alpha;
+    ctx.translate(cx, cy);
+    ctx.rotate(rot || 0);
+
+    // 投影（不跟着旋转，画在旋转前）
+    ctx.save();
+    ctx.rotate(-(rot || 0) * 0.35);
+    ctx.fillStyle = 'rgba(0,0,0,0.34)';
+    ctx.beginPath();
+    ctx.ellipse(1.5, s * 0.56, s * 0.52, s * 0.17, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
+
+    // 侧面（下移一点的暗色方块 = 厚度）
+    ctx.fillStyle = '#bdb093';
+    roundRect(-s / 2, -s / 2 + s * 0.09, s, s, s * 0.17);
+    ctx.fill();
+
+    // 正面
+    const g = ctx.createLinearGradient(-s / 2, -s / 2, s / 2, s / 2);
+    g.addColorStop(0, '#fffdf3');
+    g.addColorStop(0.55, '#f4ecd8');
+    g.addColorStop(1, '#d8ccae');
+    ctx.fillStyle = g;
+    roundRect(-s / 2, -s / 2, s, s, s * 0.17);
+    ctx.fill();
+
+    // 高光
+    ctx.save();
+    roundRect(-s / 2, -s / 2, s, s, s * 0.17);
+    ctx.clip();
+    const hl = ctx.createLinearGradient(-s / 2, -s / 2, -s / 2, s * 0.1);
+    hl.addColorStop(0, 'rgba(255,255,255,0.72)');
+    hl.addColorStop(1, 'rgba(255,255,255,0)');
+    ctx.fillStyle = hl;
+    ctx.fillRect(-s / 2, -s / 2, s, s * 0.6);
+    ctx.restore();
+
+    // 边框
+    ctx.strokeStyle = 'rgba(120,100,70,0.45)';
+    ctx.lineWidth = Math.max(1, s * 0.022);
+    roundRect(-s / 2, -s / 2, s, s, s * 0.17);
+    ctx.stroke();
+
+    // 点数
+    const pips = DICE_FACE[v] || [];
+    const pr = s * 0.082;
+    for (let i = 0; i < pips.length; i++) {
+      const px = -s / 2 + pips[i][0] * s;
+      const py = -s / 2 + pips[i][1] * s;
+      ctx.fillStyle = 'rgba(40,32,24,0.35)';
+      ctx.beginPath(); ctx.arc(px + pr * 0.16, py + pr * 0.2, pr, 0, Math.PI * 2); ctx.fill();
+      ctx.fillStyle = (v === 1) ? '#b63a2c' : (v === 4) ? '#2f6b45' : '#2b2723';
+      ctx.beginPath(); ctx.arc(px, py, pr, 0, Math.PI * 2); ctx.fill();
+      ctx.fillStyle = 'rgba(255,255,255,0.28)';
+      ctx.beginPath(); ctx.arc(px - pr * 0.32, py - pr * 0.34, pr * 0.32, 0, Math.PI * 2); ctx.fill();
+    }
+    ctx.restore();
+  }
+
+  /* ---------------- 开场动画 ---------------- */
+
+  var INTRO = null;
+  var INTRO_MS = { shuffle: 900, wall: 700, dice: 1250, deal: 950 };
+  var INTRO_TOTAL = INTRO_MS.shuffle + INTRO_MS.wall + INTRO_MS.dice + INTRO_MS.deal;
+
+  function clamp01(v) { return v < 0 ? 0 : (v > 1 ? 1 : v); }
+  function smooth01(v) { v = clamp01(v); return v * v * (3 - 2 * v); }
+
+  function sfxShuffle() {
+    const t = nowT();
+    if (t === null) return;
+    for (let i = 0; i < 9; i++) {
+      clack(t + i * 0.088, 0.085 + (i % 3) * 0.018, 1450 + (i % 4) * 130, 0.032, 0.05);
+    }
+  }
+
+  function sfxDiceLand() {
+    const t = nowT();
+    if (t === null) return;
+    clack(t, 0.17, 880, 0.05, 0.22);
+    clack(t + 0.085, 0.12, 760, 0.04, 0.16);
+  }
+
+  // 牌墙位置：0 上、1 右、2 下、3 左
+  function introWallPos(seg, idx, n) {
+    const step = 34;
+    const off = (idx - (n - 1) / 2) * step;
+    if (seg === 0) return { x: VW / 2 + off, y: 116, w: 26, h: 36 };
+    if (seg === 2) return { x: VW / 2 + off, y: VH - 152, w: 26, h: 36 };
+    if (seg === 1) return { x: VW - 118, y: VH / 2 + off, w: 36, h: 26 };
+    return { x: 118, y: VH / 2 + off, w: 36, h: 26 };
+  }
+
+  function startIntro(dice) {
+    const pile = [];
+    const N = 52;
+    for (let i = 0; i < N; i++) {
+      const a = (i / N) * Math.PI * 2 * 3 + (i % 5) * 0.31;
+      const rr = 26 + (i % 9) * 11;
+      pile.push({
+        px: VW / 2 + Math.cos(a) * rr * 1.55,
+        py: VH * 0.47 + Math.sin(a) * rr * 0.72,
+        rot: (((i * 47) % 70) - 35) * Math.PI / 180,
+        seg: i % 4,
+        idx: Math.floor(i / 4),
+        delay: ((i * 7) % 6) * 0.055
+      });
+    }
+    INTRO = {
+      t0: Date.now(),
+      dice: (dice || []).slice(),
+      dealer: G.dealer,
+      pile: pile,
+      diceSounded: false,
+      stage: 'shuffle'
+    };
+    G.phase = 'intro';
+  }
+
+  function finishIntro() {
+    INTRO = null;
+    G.phase = 'playing';
+    recomputeTenpai();
+    markDirty();
+  }
+
+  // 推进动画：换阶段时发声，结束时进入正式对局
+  function advanceIntro() {
+    if (!INTRO) { G.phase = 'playing'; return true; }
+    if (INTRO.frozen) return true;   // 截图/演示用：把动画定格在某一帧
+    const e = Date.now() - INTRO.t0;
+    const t1 = INTRO_MS.shuffle, t2 = t1 + INTRO_MS.wall, t3 = t2 + INTRO_MS.dice;
+    const stage = e < t1 ? 'shuffle' : e < t2 ? 'wall' : e < t3 ? 'dice' : 'deal';
+    if (stage !== INTRO.stage) {
+      INTRO.stage = stage;
+      if (stage === 'shuffle') sfxShuffle();
+    }
+    if (stage === 'dice' && !INTRO.diceSounded && e > t2 + INTRO_MS.dice * 0.58) {
+      INTRO.diceSounded = true;
+      sfxDiceLand();
+    }
+    if (e >= INTRO_TOTAL) {
+      finishIntro();
+      return true;
+    }
+    return true;
+  }
+
+  /* ---------------- 四·七 联机开场动画 ----------------
+   * 联机的发牌在服务端已经做完了，但玩家仍然想看到「洗牌—砌墙—掷骰—发牌」的过程，
+   * 所以这里画一段纯视觉的过场：牌桌由单机逻辑正常绘制，本函数只叠加牌墙与骰子。 */
+  var ONLINE_INTRO = null;
+
+  function startOnlineIntro(dice, dealer, name) {
+    ONLINE_INTRO = {
+      t0: Date.now(),
+      dice: dice || [1, 1],
+      dealer: dealer || 0,
+      name: name || ('电脑·' + SEAT_NAMES[dealer || 0]),
+      dur: 2600,
+      landed: false
+    };
+    sfxShuffle();
+    markDirty();
+    render();
+  }
+
+  function skipOnlineIntro() {
+    if (!ONLINE_INTRO) return false;
+    ONLINE_INTRO = null;
+    markDirty();
+    return true;
+  }
+
+  function onlineIntroActive() {
+    if (!ONLINE_INTRO) return false;
+    if (Date.now() - ONLINE_INTRO.t0 > ONLINE_INTRO.dur) { ONLINE_INTRO = null; return false; }
+    return true;
+  }
+
+  function drawOnlineIntro() {
+    var it = ONLINE_INTRO;
+    if (!it) return;
+    var e = Date.now() - it.t0;
+    var total = (it.dice[0] + it.dice[1]);
+    // 骰子落地那一下给个声音（只响一次）
+    if (!it.landed && e > 1050) { it.landed = true; sfxDiceLand(); }
+
+    ctx.save();
+    ctx.fillStyle = 'rgba(2,10,7,0.34)';
+    ctx.fillRect(0, 0, VW, VH);
+
+    // 一、洗牌：中间一坨牌背随机抖动
+    var p1 = Math.min(1, e / 780);
+    var n = 44;
+    for (var i = 0; i < n; i++) {
+      var a = (i * 2.399963) % (Math.PI * 2);
+      var rr = 26 + (i % 7) * 9;
+      var jx = Math.sin(e / 90 + i) * 7 * (1 - p1 * 0.75);
+      var jy = Math.cos(e / 107 + i * 1.7) * 6 * (1 - p1 * 0.75);
+      var cx = VW / 2 + Math.cos(a) * rr + jx;
+      var cy = VH * 0.42 + Math.sin(a) * rr * 0.62 + jy;
+      drawTile(0, cx - 20, cy - 28, 40, 56, { face: false });
+    }
+
+    // 二、骰子：从上方落下，落定后弹一下
+    var p2 = Math.max(0, Math.min(1, (e - 700) / 420));
+    var drop = (1 - p2) * (1 - p2);
+    var dy = -180 * drop;
+    var s1 = 74, gap = 18;
+    drawDie(VW / 2 - s1 / 2 - gap, VH * 0.42 + dy, s1, it.dice[0], (1 - p2) * 3.2, 0.35 + 0.65 * p2);
+    drawDie(VW / 2 + s1 / 2 + gap, VH * 0.42 + dy, s1, it.dice[1], -(1 - p2) * 3.6, 0.35 + 0.65 * p2);
+
+    // 三、结果文字
+    if (p2 >= 1) {
+      drawText('掷骰 ' + it.dice[0] + ' + ' + it.dice[1] + ' = ' + total + ' 点',
+        VW / 2, VH * 0.42 + 118, 30, 'rgba(255,236,190,0.98)', 'center', '700');
+      drawText(it.name + '坐庄', VW / 2, VH * 0.42 + 158, 24, 'rgba(255,214,120,0.95)', 'center');
+    }
+    drawText('发牌中…', VW / 2, VH * 0.78, 16, 'rgba(190,226,206,0.75)', 'center');
+    drawText('点击任意处跳过', VW / 2, VH - 26, 13, 'rgba(170,206,186,0.55)', 'center');
+    ctx.restore();
+  }
+
+  function renderIntro() {
+    const it = INTRO;
+    if (!it) { renderTable(); return; }
+    const e = it.frozen ? it.freezeAt : (Date.now() - it.t0);
+    const S = INTRO_MS;
+    const t1 = S.shuffle, t2 = t1 + S.wall, t3 = t2 + S.dice;
+
+    const q1 = clamp01(e / S.shuffle);
+    const q2 = clamp01((e - t1) / S.wall);
+    const q3 = clamp01((e - t2) / S.dice);
+    const q4 = clamp01((e - t3) / S.deal);
+
+    // 阶段提示
+    let label = '洗牌', sub = '把牌搓匀，谁也猜不到下一张';
+    if (e >= t1) { label = '砌墙'; sub = '四家各码一列牌墙'; }
+    if (e >= t2) { label = '掷骰子'; sub = '点数决定谁坐庄'; }
+    if (e >= t3) { label = '发牌'; sub = '各十三张，庄家多摸一张'; }
+    drawText(label, VW / 2, VH * 0.255, 30, 'rgba(255,232,170,0.95)', 'center', '700');
+    drawText(sub, VW / 2, VH * 0.255 + 30, 15, 'rgba(200,220,208,0.72)', 'center');
+
+    // 牌堆 → 牌墙
+    const jit = 15 * (1 - q1);
+    for (let i = 0; i < it.pile.length; i++) {
+      const t = it.pile[i];
+      let x = t.px + Math.sin(e / 85 + i * 1.7) * jit;
+      let y = t.py + Math.cos(e / 105 + i * 2.3) * jit * 0.72;
+      let w = 30, h = 42, rot = t.rot;
+      if (q2 > 0) {
+        const wp = introWallPos(t.seg, t.idx, 13);
+        const k = smooth01((q2 - t.delay) / (1 - t.delay * 0.9 || 1));
+        x = x + (wp.x - x) * k;
+        y = y + (wp.y - y) * k;
+        w = w + (wp.w - w) * k;
+        h = h + (wp.h - h) * k;
+        rot = rot * (1 - k);
+      }
+      let alpha = 1;
+      if (q4 > 0) {
+        alpha = 1 - clamp01((q4 - t.idx / 30) * 1.7);
+        if (alpha <= 0) continue;
+      }
+      ctx.save();
+      ctx.globalAlpha = alpha;
+      ctx.translate(x + w / 2, y + h / 2);
+      ctx.rotate(rot);
+      drawTileBack(-w / 2, -h / 2, w, h);
+      ctx.restore();
+    }
+
+    // 骰子
+    if (e >= t2) {
+      const drop = clamp01(q3 / 0.55);
+      const yy0 = -140;
+      const yBase = VH * 0.455;
+      let yy = yy0 + (yBase - yy0) * smooth01(drop);
+      const settled = q3 > 0.55;
+      if (settled) {
+        const k = (q3 - 0.55) / 0.45;
+        yy -= Math.abs(Math.sin(k * Math.PI * 3.2)) * 9 * (1 - k);
+      }
+      const s = Math.min(VW, VH) * 0.135;
+      const rot1 = (1 - q3) * Math.PI * 2.3 + 0.12;
+      const rot2 = (1 - q3) * -Math.PI * 1.9 - 0.18;
+      drawDie(VW / 2 - s * 0.78, yy, s, it.dice[0], rot1);
+      drawDie(VW / 2 + s * 0.78, yy, s, it.dice[1], rot2);
+
+      if (q3 > 0.62) {
+        const a = clamp01((q3 - 0.62) / 0.38);
+        const total = it.dice[0] + it.dice[1];
+        ctx.save();
+        ctx.globalAlpha = a;
+        drawText(total + ' 点', VW / 2, yy + s * 1.05, 28, '#ffe8aa', 'center', '800');
+        drawText(SEAT_NAMES[it.dealer] + '坐庄', VW / 2, yy + s * 1.05 + 30, 18, 'rgba(255,240,200,0.9)', 'center');
+        if (it.dealer === 0) {
+          drawText('你先出牌', VW / 2, yy + s * 1.05 + 54, 14, 'rgba(160,240,190,0.9)', 'center');
+        }
+        ctx.restore();
+      }
+    }
+
+    // 发牌：自己的手牌一张张落位
+    if (q4 > 0) {
+      const n = Math.round(q4 * 14);
+      const tw = TW * 0.60, th = TH * 0.60, gap = 4;
+      const totalW = 14 * (tw + gap) - gap;
+      let x = VW / 2 - totalW / 2;
+      const y = VH - th - 44;
+      for (let i = 0; i < n; i++) {
+        const ap = clamp01((q4 - i / 16) * 3.2);
+        ctx.save();
+        ctx.globalAlpha = ap;
+        drawTileBack(x, y - (1 - ap) * 30, tw, th);
+        ctx.restore();
+        x += tw + gap;
+      }
+    }
+
+    drawText('点击任意处跳过', VW / 2, VH - 26, 12, 'rgba(200,220,208,0.45)', 'center');
+  }
+
+  // 重开一局：掷骰定庄 → 可选开场动画
+  function beginRound(skipIntro) {
+    const d = rollDice();
+    resetGame(d);
+    recomputeTenpai();
+    if (skipIntro) {
+      INTRO = null;
+      G.phase = 'playing';
+    } else {
+      startIntro(d);
+    }
+    markDirty();
+  }
+
   function render() {
     applyTransform();
     if (onlineRenderOverride && onlineRenderOverride()) return;
+    // 开场动画期间只画动画，不画牌桌
+    if (G.phase === 'intro') {
+      TEXTLOG.length = 0;
+      handHit = []; buttonHit = []; discardHit = []; meldHit = [];
+      drawTableBase();
+      drawFeltPattern();
+      renderIntro();
+      drawSystemButtons();
+      return;
+    }
     // 每帧先看看有没有新事件（出牌 / 碰 / 杠 / 胡），有就补上飘字与声音。
     // 差异式实现，重复调用不会重复触发。
     watchEvents();
@@ -1539,20 +2059,8 @@
   function renderScene() {
     TEXTLOG.length = 0;
 
-    ctx.fillStyle = '#0b1d13';
-    ctx.fillRect(0, 0, VW, VH);
-
-    // 桌面绒布
-    const g = ctx.createRadialGradient(VW / 2, VH * 0.46, 60, VW / 2, VH * 0.46, VW * 0.72);
-    g.addColorStop(0, '#1c4a2c');
-    g.addColorStop(1, '#0c2216');
-    ctx.fillStyle = g;
-    roundRect(24, 24, VW - 48, VH - 48, 26);
-    ctx.fill();
-    ctx.strokeStyle = 'rgba(232,196,106,0.22)';
-    ctx.lineWidth = 2;
-    roundRect(24, 24, VW - 48, VH - 48, 26);
-    ctx.stroke();
+    // 牌桌场景（木框 + 绒布 + 桌沿 + 暗角）
+    drawTableBase();
 
     // 桌面图案
     drawFeltPattern();
@@ -1573,6 +2081,7 @@
     }
     drawTurnClock();
     drawFloaters();
+    if (ONLINE_INTRO) drawOnlineIntro();
     drawSystemButtons();
   }
 
@@ -1585,6 +2094,7 @@
     drawText('本玩法不含「吃」 · 手机可全屏玩 · 右上角可开关声音', cx, VH * 0.585, 17, 'rgba(200,220,208,0.75)', 'center');
     drawText('每人 30 秒思考时间 · 超时会替你自动出牌', cx, VH * 0.632, 17, 'rgba(255,214,120,0.85)', 'center');
     drawText('目标：凑齐四组面子（顺子或刻子）+ 一对将', cx, VH * 0.682, 16, 'rgba(200,220,208,0.55)', 'center');
+    drawText('开局掷骰定庄 · 洗牌 / 砌墙 / 发牌动画', cx, VH * 0.722, 14, 'rgba(180,235,205,0.62)', 'center');
 
     const bw = 200, bh = 58;
     const bx = cx - bw / 2, by = VH * 0.75;
@@ -1921,7 +2431,10 @@
 
   function onTap(clientX, clientY) {
     const p = toLogical(clientX, clientY);
+    if (ONLINE_INTRO) { skipOnlineIntro(); return; }
     if (onlineTap && onlineTap(clientX, clientY) === true) { markDirty(); return; }
+    // 开场动画：点一下直接入局
+    if (G.phase === 'intro') { finishIntro(); markDirty(); return; }
     const b = hit(buttonHit, p.x, p.y);
     if (b) { doAction(b.action); markDirty(); return; }
     if (G.phase === 'playing' && G.turn === 0 && G.waitingFor === 'discard' && !G.pendingClaim) {
@@ -1949,8 +2462,7 @@
       if (onlineAction) { onlineAction('again'); return; }
       // 手机上顺手进全屏（由用户点击触发，符合浏览器要求）
       if (isTouchDevice() && !fsElement()) enterFullscreen();
-      resetGame();
-      recomputeTenpai();
+      beginRound(false);
       return;
     }
     if (a === 'pass') { sfxTap(); if (onlineAction) { onlineAction('claim', null, 'pass'); return; } passClaim(); return; }
@@ -2082,6 +2594,12 @@
   function markDirty() { dirty = true; }
 
   function tick() {
+    // 开场动画（洗牌 / 砌墙 / 掷骰 / 发牌）
+    if (G.phase === 'intro') {
+      advanceIntro();
+      render();
+      return;
+    }
     // 联机模式下 G 是服务端快照，waitingFor==='ai' 只代表「别人在思考」，
     // 绝不能跑本地 AI——否则会用本地空牌墙 drawFor，直接把 phase 改成 over（踩过）
     if (!onlineAction && G.phase === 'playing' && G.waitingFor === 'ai' && !G.pendingClaim) {
@@ -2103,6 +2621,7 @@
     if (watchEvents()) dirty = true;
     // 飘字还在动画中 → 持续重绘
     if (FLOATERS.length) dirty = true;
+    if (ONLINE_INTRO) { dirty = true; onlineIntroActive(); }
 
     // 30 秒没动 → 自动代打（仅单机；联机由服务端托管）
     if (!onlineAction && G.phase === 'playing') {
@@ -2137,6 +2656,24 @@
   /* ============================================================
    *  九、调试接口（供自动化测试读取内部状态）
    * ============================================================ */
+  // 统一的开局入口（测试与截图用）：opts.dice 指定骰子，opts.intro 播开场动画
+  function __dbgStart(opts) {
+    const skip = !(opts && opts.intro);
+    const dice = (opts && opts.dice && opts.dice.length === 2) ? opts.dice : null;
+    if (skip) {
+      resetGame(dice || undefined);
+      recomputeTenpai();
+      G.phase = 'playing';
+      INTRO = null;
+    } else {
+      const d = dice || rollDice();
+      resetGame(d);
+      recomputeTenpai();
+      startIntro(d);
+    }
+    markDirty();
+  }
+
   window.__mjDebug = {
     get state() { return G.phase; },
     get turn() { return G.turn; },
@@ -2155,7 +2692,62 @@
     winningTiles: winningTiles,
     makeWall: makeWall,
     T: T,
-    start: function () { resetGame(); recomputeTenpai(); },
+    // 测试/截图默认跳过开场动画，保证状态立即进入 playing
+    start: function (opts) { __dbgStart(opts); },
+    // 测试用：动画不跑 rAF 时，手动推一步 AI（庄家是电脑时开局需要它先出牌）
+    kickAi: function () {
+      if (G.phase !== 'playing' || G.waitingFor !== 'ai' || G.pendingClaim) return false;
+      if (G.turn === 0) return false;
+      aiTurn(G.turn);
+      return true;
+    },
+    // 截图用：把开场动画定格在指定毫秒（之后的 tick 不再推进）
+    freezeIntro: function (ms) {
+      if (!INTRO) return false;
+      INTRO.t0 = Date.now() - ms;
+      INTRO.freezeAt = ms;
+      INTRO.frozen = true;
+      INTRO.stage = ms < INTRO_MS.shuffle ? 'shuffle'
+        : ms < INTRO_MS.shuffle + INTRO_MS.wall ? 'wall'
+        : ms < INTRO_MS.shuffle + INTRO_MS.wall + INTRO_MS.dice ? 'dice' : 'deal';
+      markDirty();
+      render();
+      return true;
+    },
+    // 测试用：把开场动画快进到指定毫秒（不依赖真实时间）
+    forceIntroStage: function (ms) {
+      if (!INTRO) return;
+      INTRO.t0 = Date.now() - ms;
+      advanceIntro();
+      markDirty();
+      render();
+    },
+    // 强制播一遍开场动画（可指定骰子点数，用于截图与测试）
+    startIntro: function (d) {
+      const dd = (d && d.length === 2) ? d : rollDice();
+      resetGame(dd);
+      recomputeTenpai();
+      startIntro(dd);
+      markDirty();
+    },
+    skipIntro: function () { finishIntro(); },
+    // 联机开场动画
+    startOnlineIntro: function (dice, dealer, name) { startOnlineIntro(dice, dealer, name); },
+    skipOnlineIntro: function () { return skipOnlineIntro(); },
+    onlineIntroActive: function () { return onlineIntroActive(); },
+    get onlineIntro() { return ONLINE_INTRO; },
+    get dealer() { return G.dealer; },
+    get dice() { return (G.dice || []).slice(); },
+    get intro() {
+      if (!INTRO) return null;
+      return {
+        stage: INTRO.stage,
+        dice: INTRO.dice.slice(),
+        dealer: INTRO.dealer,
+        elapsed: Date.now() - INTRO.t0,
+        elapsedAll: INTRO_TOTAL
+      };
+    },
     resetToTitle: function () { G.phase = 'title'; render(); },
     discard: function (t) { playerDiscard(t); },
     action: function (a) { doAction(a); },
@@ -2210,8 +2802,8 @@
     // ---- 联机扩展点（单机模式下全部为 null，行为完全不变） ----
     // 拿到内部 G 的引用，联机客户端往里面写服务端下发的视角
     getG: function () { return G; },
-    // 单机开机（联机退回单人时用）
-    start: function () { resetGame(); recomputeTenpai(); markDirty(); },
+    // 单机开机（联机退回单人时用）；opts.dice 可指定骰子，opts.intro 可播开场动画
+    start: function (opts) { __dbgStart(opts); },
     // 替换整帧渲染：返回 true 表示这一帧由联机界面自己画
     setRenderOverride: function (fn) { onlineRenderOverride = fn || null; markDirty(); },
     // 改写动作出口：fn(null) 恢复单机，fn(fn) 交给联机发往服务器
@@ -2257,8 +2849,7 @@
 
   // 自动化测试环境下自动开局
   if (window.__MJ_AUTOSTART) {
-    resetGame();
-    recomputeTenpai();
+    __dbgStart({ dice: window.__MJ_DICE || null });
     render();
     // 自动代打：把局面推进到指定步数，用于截图验证中盘界面
     if (window.__MJ_AUTOPLAY) {

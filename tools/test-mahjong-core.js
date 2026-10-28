@@ -288,7 +288,11 @@ function driveOneGame(maxSteps) {
 
     // 2) 其余情况执行排队的 AI 回调
     const drained = drainAiQueue(1);
-    if (drained === 0) break;        // 队列空且无人可动 —— 真卡住
+    if (drained === 0) {
+      // 骰子定庄后庄家可能是电脑：开局那一步没人排队，手动推一把
+      if (dbg.kickAi && dbg.kickAi()) continue;
+      break;                        // 队列空且无人可动 —— 真卡住
+    }
   }
   return steps;
 }
@@ -454,7 +458,7 @@ noOverlap(handFull, L2.buttons.filter((b) => b.action !== 'mute' && b.action !==
 console.log('\n10) 30 秒思考时限与出牌飘字');
 ok(dbg.turnLimit === 30000, '每人思考时限为 30 秒', '实际 ' + dbg.turnLimit + 'ms');
 
-dbg.start();
+dbg.start({ dice: [1, 4] });   // 2 点 → 玩家（你）坐庄
 dbg.resyncEvents();
 dbg.clearFloaters();
 // 开局轮到我出牌时，倒计时应在 (0, 30s] 之间且在往下走
@@ -498,7 +502,7 @@ ok(audioStats.buf > bufBeforePon && audioStats.osc > oscBeforePon,
   '碰牌有独立的碰撞声与和弦');
 
 // 超时自动托管：不点任何东西，直接让时限到点
-dbg.start();
+dbg.start({ dice: [1, 4] });
 dbg.resyncEvents();
 const beforeAuto = { log: dbg.log.length, disc: dbg.discards[0].length, auto: dbg.clockAuto };
 dbg.autoPlay();
@@ -509,7 +513,7 @@ ok(dbg.log.length > beforeAuto.log || dbg.discards[0].length > beforeAuto.disc,
   '日志 ' + beforeAuto.log + ' → ' + dbg.log.length + '，牌河 ' + beforeAuto.disc + ' → ' + dbg.discards[0].length);
 
 // 超时遇到碰杠胡机会：能胡就胡，否则自动过
-dbg.start();
+dbg.start({ dice: [1, 4] });
 dbg.fakeClaim();
 dbg.resyncEvents();
 dbg.autoPlay();
@@ -544,6 +548,54 @@ ok(/function floatText/.test(script) && /function drawFloaters/.test(script), '�
 ok(/function autoPlay/.test(script), '超时自动代打函数存在');
 ok(/TURN_LIMIT = 30000/.test(script), '源码里写死了 30 秒');
 ok(/function sfxRivalDiscard/.test(script), '别人出牌有独立的轻一些的碰撞声');
+
+/* ---------------- 12) 骰子定庄 + 桌面背景 + 开场动画 ---------------- */
+console.log('\n12) 骰子定庄 / 牌桌背景 / 开场动画');
+dbg.start({ dice: [3, 4] });
+ok(dbg.dice.join(',') === '3,4', '骰子点数被记住', dbg.dice.join(','));
+ok(dbg.dealer === (3 + 4 - 1) % 4, '两颗骰子的点数和决定庄家', '庄家=' + dbg.dealer);
+ok(dbg.turn === dbg.dealer, '庄家先手', 'turn=' + dbg.turn);
+ok(dbg.handCounts[dbg.dealer] === 14, '庄家多摸一张（14 张）', JSON.stringify(dbg.handCounts));
+ok(dbg.handCounts.reduce((a, b) => a + b, 0) === 53, '四家合计 53 张（13×4 + 庄家多一张）',
+  '合计 ' + dbg.handCounts.reduce((a, b) => a + b, 0));
+dbg.start({ dice: [1, 4] });
+ok(dbg.dealer === 0, '5 点 → 玩家坐庄', '庄家=' + dbg.dealer);
+ok(dbg.waitingFor === 'discard', '玩家坐庄时立刻轮到自己出牌', dbg.waitingFor);
+dbg.start({ dice: [6, 6] });
+ok(dbg.dealer === 3, '12 点 → 上家坐庄', '庄家=' + dbg.dealer);
+ok(dbg.waitingFor === 'ai', '电脑坐庄时先由电脑出牌', dbg.waitingFor);
+ok(dbg.log.some((s) => /掷骰 \d \+ \d = \d+ 点/.test(s)), '日志里记录了掷骰结果',
+  (dbg.log[dbg.log.length - 1] || ''));
+
+// 开场动画：能进入 intro 相位、四个阶段都出现过、点一下能跳过
+dbg.startIntro([2, 5]);
+ok(dbg.state === 'intro', '开始游戏会先播开场动画', dbg.state);
+ok(dbg.intro && dbg.intro.stage === 'shuffle', '动画从洗牌开始', dbg.intro && dbg.intro.stage);
+ok(dbg.intro.dice.join(',') === '2,5' && dbg.intro.dealer === 2, '动画里的骰子与庄家和发牌一致',
+  JSON.stringify(dbg.intro));
+const stagesSeen = new Set();
+[120, 1000, 1800, 3100].forEach(function (ms) {
+  dbg.forceIntroStage(ms);
+  if (dbg.intro) stagesSeen.add(dbg.intro.stage);
+});
+ok(stagesSeen.has('shuffle') && stagesSeen.has('wall') && stagesSeen.has('dice') && stagesSeen.has('deal'),
+  '洗牌 / 砌墙 / 掷骰 / 发牌 四个阶段都走得到', Array.from(stagesSeen).join(' → '));
+dbg.forceIntroStage(5000);
+ok(dbg.state === 'playing', '动画放完自动进入对局', dbg.state);
+dbg.startIntro([1, 1]);
+dbg.rawRender();
+dbg.skipIntro();
+ok(dbg.state === 'playing', '点一下可以跳过开场动画', dbg.state);
+
+// 源码特征：背景、骰子、动画三件套必须真的写进页面
+ok(/function drawTableBase/.test(script), '牌桌背景是独立绘制的场景');
+ok(/圆木|木纹|drawTableBase\(\);/.test(script) && /drawFeltPattern\(\);/.test(script), '木框 + 绒布都在渲染路径上');
+ok(/function drawDie/.test(script) && /DICE_FACE/.test(script), '骰子是画出来的（有六面点数）');
+ok(/function rollDice/.test(script), '有掷骰函数');
+ok(/function startIntro/.test(script) && /function renderIntro/.test(script), '开场动画有独立的绘制函数');
+ok(/shuffle: 900, wall: 700, dice: 1250, deal: 950/.test(script), '动画四阶段：洗牌/砌墙/掷骰/发牌');
+ok(/function beginRound/.test(script), '开局统一走 beginRound（掷骰 → 发牌 → 动画）');
+ok(/顶面/.test(script) && /侧面/.test(script) && /投影/.test(script), '牌面有顶面/侧面/投影三层，才是立体的');
 
 /* ---------------- 11) 手牌自动排序 + 音效柔化 ---------------- */
 console.log('\n11) 手牌排序与音色');

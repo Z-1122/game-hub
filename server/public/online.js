@@ -34,7 +34,7 @@
 
   // 客户端版本号：改完这里，手机上能直接看到大厅底部显示的是哪一版，
   // 用来判断「是不是浏览器还缓存着旧文件」。
-  var VERSION = '2026-10-28d';
+  var VERSION = '2026-10-29e';
 
   // 画了几帧 / 最近一次绘制异常：手机上黑屏时靠它俩定位问题
   var FRAMES = 0;
@@ -191,6 +191,7 @@
         ST.turnAt = Date.now();
         ST.myTurn = (msg.view.waitingFor === 'me' || msg.view.waitingFor === 'claim');
         applyView(msg.view);
+        maybePlayIntro(msg.view);
         return;
       case 'log':
         hint(msg.text);
@@ -203,6 +204,20 @@
         break;
     }
     DBG.markDirty();
+  }
+
+  // 新的一局开一段过场动画（洗牌 + 砌墙 + 掷骰定庄），只播一次；不喜欢可以点一下跳过
+  function maybePlayIntro(v) {
+    if (!v || v.phase !== 'playing') return;
+    if (!v.dice || !DBG.startOnlineIntro) return;
+    var key = (v.roundNo || 1) + ':' + v.dice.join(',') + ':' + v.dealer;
+    if (ST.introKey === key) return;
+    ST.introKey = key;
+    var seat = (typeof v.seat === 'number') ? v.seat : 0;
+    var rot = (v.dealer - seat + 4) % 4;
+    var who = (v.players && v.players[v.dealer]) ? v.players[v.dealer].name : '';
+    ST.introUntil = Date.now() + 2600;
+    try { DBG.startOnlineIntro(v.dice, rot, who); } catch (e) { /* 过场动画失败不影响打牌 */ }
   }
 
   // 把服务端视角旋转成「我在 0 号位」放进单机版的 G，原绘制逻辑即可直接渲染
@@ -468,7 +483,14 @@
 
   /* ---------------- 点击分发 ---------------- */
   // DOM 模式下 canvas 上的点击一律不交给单机逻辑（大厅没有可点的画布内容）
-  DBG.onlineTap = function () { return ST.phase !== 'playing'; };
+  DBG.onlineTap = function () {
+    if (ST.introUntil && Date.now() < ST.introUntil) {
+      ST.introUntil = 0;
+      if (DBG.skipOnlineIntro) DBG.skipOnlineIntro();
+      return true;
+    }
+    return ST.phase !== 'playing';
+  };
 
   function handleUI(a) {
     if (DBG.sfxOne) DBG.sfxOne('tap');

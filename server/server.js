@@ -252,8 +252,9 @@ class Room {
     this.log = [];
     this.broadcastRoom();
     this.pushLog('开局！你是「' + Core.SEAT_NAMES[seat] + '」家');
-    // 庄家（东位）先摸牌
-    this.game.turn = 0;
+    this.pushLog('掷骰 ' + this.game.dice[0] + ' + ' + this.game.dice[1] +
+      ' = ' + (this.game.dice[0] + this.game.dice[1]) + ' 点，' +
+      Core.SEAT_NAMES[this.game.dealer] + '坐庄。');
     this.advanceTurn();
   }
 
@@ -270,7 +271,9 @@ class Room {
     })));
     this.log = [];
     this.pushLog('新的一局开始');
-    this.game.turn = 0;
+    this.pushLog('掷骰 ' + this.game.dice[0] + ' + ' + this.game.dice[1] +
+      ' = ' + (this.game.dice[0] + this.game.dice[1]) + ' 点，' +
+      Core.SEAT_NAMES[this.game.dealer] + '坐庄。');
     this.advanceTurn();
     return null;
   }
