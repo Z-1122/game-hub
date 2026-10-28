@@ -68,6 +68,8 @@
     60%, 100% { transform: rotate(-90deg); }
   }
   @media (prefers-reduced-motion: reduce) { #rotate-tip .phone { animation: none; transform: rotate(-90deg); } }
+  /* 手机全屏（地址栏收起时）用动态视口高度，避免地址栏占位把画面往下压 */
+  @supports (height: 100dvh) { #stage { height: 100dvh; } }
 </style>
 </head>
 <body>
@@ -339,7 +341,7 @@
     G.lastDiscard = { tile: tile, from: p };
     G.drawnTile = null;
     pl.drawn = null;
-    sfxDiscard();
+    // 出牌音效统一交给 watchEvents()（联机模式下这里根本不会跑）
     // 玩家出牌后，检查其他三家是否有碰杠胡的机会
     G.turn = (p + 1) % 4;
     offerClaims(p, tile);
@@ -391,7 +393,6 @@
     pl.drawn = null;
     G.drawnTile = null;
     pushLog(SEAT_NAMES[p] + ' 碰了 ' + T.short(tile));
-    sfxPon();
   }
 
   function applyKan(p, tile, from, isConcealed) {
@@ -407,7 +408,6 @@
       G.lastDiscard = null;
       pushLog(SEAT_NAMES[p] + ' 杠了 ' + T.short(tile));
     }
-    sfxKan();
     G.turn = p;
     // 杠后补一张
     const t = drawFor(p);
@@ -424,7 +424,6 @@
     if (!selfDraw && tile != null) pl.hand.push(tile);
     sortHand(pl.hand);
     pushLog(SEAT_NAMES[p] + (selfDraw ? ' 自摸！' : ' 胡了 ' + T.short(tile) + '！'));
-    if (p === 0) sfxHu(); else sfxOtherWin();
   }
 
   function endRound(winner, reason) {
@@ -432,7 +431,6 @@
     G.winner = winner;
     G.waitingFor = 'none';
     pushLog(reason);
-    sfxFlow();
   }
 
   /* ============================================================
@@ -698,6 +696,10 @@
     const t = nowT(); if (t === null) return;
     clack(t, 0.13, 3400, 0.035, 0.1);
   }
+  function sfxRivalDiscard() {         // 别人出牌：比自己的轻、比摸牌实，听得出方位
+    const t = nowT(); if (t === null) return;
+    clack(t, 0.17, 2200, 0.045, 0.22);
+  }
   function sfxPon() {                  // 碰：三张牌连续拍下 + 明亮上行三音
     const t = nowT(); if (t === null) return;
     clack(t,         0.30, 2100, 0.06, 0.30);
@@ -794,12 +796,19 @@
   function canvasCssHeight() { return cv.clientHeight || window.innerHeight || VH; }
 
   function applyTransform() {
-    ctx.setTransform(dpr * scale, 0, 0, dpr * scale, dpr * offX, dpr * offY);
+    // setTransform 在部分手机浏览器上每次调用都会让 canvas 失效重绘，
+    // 几何没变就别调（和 fit() 幂等化同一套思路，防闪）。
+    const tx = dpr * scale, ty = dpr * offX, tz = dpr * offY;
+    if (tx === lastTx && ty === lastTfx && tz === lastTfy && lastTransformSet) return;
+    lastTransformSet = true;
+    lastTx = tx; lastTfx = ty; lastTfy = tz;
+    ctx.setTransform(tx, 0, 0, tx, ty, tz);
   }
+  var lastTransformSet = false, lastTx = 0, lastTfx = 0, lastTfy = 0;
 
   // 牌面尺寸
   // 构建标记：用于确认浏览器实际加载的是哪一版（部署漏传 / 缓存排查用）
-  const BUILD = '2026-10-26 #5';
+  const BUILD = '2026-10-28 #6';
 
   const TW = 56, TH = 76;         // 竖着的牌（手牌/牌河）—— 2026-10-26 放大，手牌更好认
   const TD = 0.30;                // 牌的「厚度」比率（用于侧向牌）
@@ -1068,7 +1077,13 @@
     ctx.fill();
   }
 
+  var TEXTLOG = [];   // 本帧绘制过的文字（版面自检用，标题页有没有挤在一起）
+
   function drawText(s, x, y, size, color, align, weight) {
+    // 记录这一帧画过的所有文字，供版面自检（标题页有没有挤在一起）
+    if (TEXTLOG.length < 400) {
+      TEXTLOG.push({ s: String(s), x: x, y: y, size: size, align: align || 'left' });
+    }
     ctx.save();
     ctx.fillStyle = color || '#f2f6f0';
     ctx.font = (weight || '500') + ' ' + size + 'px "PingFang SC","Microsoft YaHei",sans-serif';
@@ -1278,8 +1293,236 @@
     ctx.restore();
   }
 
+  /* ---- 联机扩展点（默认全空，单机行为完全不变） ----
+   * 联机模式由 server/public/online.js 在运行时装上：
+   *   renderOverride() 返回 true 表示这一帧由联机界面自己画
+   *   onTap(x, y) 返回 true 表示这次点击已被联机界面处理
+   *   sendAction(a, tile) 不为空时，出牌/碰/杠/胡/过 都改由它发送给服务器
+   * 注意：用 var 声明，避免上文的暂时性死区问题。 */
+  var onlineRenderOverride = null;
+  var onlineTap = null;
+  var onlineAction = null;
+
+  /* ============================================================
+   *  四·五、回合时限：每人 30 秒
+   *  单机：本地倒计时，到点自动出牌 / 自动过
+   *  联机：时限由服务端强制执行（超时自动出牌/过），本地只显示倒计时
+   * ============================================================ */
+  var TURN_LIMIT = 30000;
+  var clockKey = null;      // 当前「该我决定」的标识，变了就重新计时
+  var clockStart = 0;
+  var clockAuto = 0;        // 自动代打次数（调试用）
+
+  function myDecision() {
+    if (G.phase !== 'playing') return null;
+    if (G.pendingClaim) return 'claim';
+    if (G.waitingFor === 'discard' || G.waitingFor === 'me') return 'discard';
+    return null;
+  }
+
+  function clockLeftMs() {
+    const kind = myDecision();
+    if (!kind || onlineAction) return -1;    // 联机看服务端给的 turnLeft
+    const pl = G.players[0];
+    const key = kind + ':' + G.turn + ':' + (pl ? pl.hand.length : 0) + ':' +
+                (G.lastDiscard ? G.lastDiscard.tile : '-');
+    if (key !== clockKey) { clockKey = key; clockStart = Date.now(); }
+    const left = TURN_LIMIT - (Date.now() - clockStart);
+    return left < 0 ? 0 : left;
+  }
+
+  // 超时自动托管：能胡就胡，否则打掉刚摸的那张（没摸就打最后一张），碰杠机会默认过
+  function autoPlay() {
+    const kind = myDecision();
+    if (!kind) return;
+    clockAuto++;
+    clockKey = null;                       // 重置计时，避免连续触发
+    if (kind === 'claim') {
+      const opts = (G.pendingClaim && G.pendingClaim.options) || [];
+      if (opts.indexOf('hu') >= 0) { doAction('hu'); return; }
+      doAction('pass');
+      return;
+    }
+    const pl = G.players[0];
+    const tile = (pl && pl.drawn != null) ? pl.drawn
+               : (pl && pl.hand.length ? pl.hand[pl.hand.length - 1] : null);
+    if (tile == null) return;
+    playerDiscard(tile);
+  }
+
+  function drawTurnClock() {
+    const left = clockLeftMs();
+    if (left < 0) return;
+    const sec = Math.ceil(left / 1000);
+    const w = 168, h = 6;
+    const x = VW / 2 - w / 2, y = VH - TH - 74;
+    const k = left / TURN_LIMIT;
+    ctx.fillStyle = 'rgba(8,26,17,0.55)';
+    roundRect(x, y, w, h, 3); ctx.fill();
+    ctx.fillStyle = sec <= 10 ? 'rgba(255,120,96,0.95)' : 'rgba(150,240,180,0.85)';
+    roundRect(x, y, Math.max(2, w * k), h, 3); ctx.fill();
+    drawText('你的回合 · ' + sec + ' 秒', VW / 2, y - 12, 13,
+      sec <= 10 ? 'rgba(255,150,130,0.95)' : 'rgba(200,230,215,0.8)', 'center');
+  }
+
+  /* ============================================================
+   *  四·六、事件观察：出牌 / 碰 / 杠 / 胡 的牌名飘字 + 碰撞声
+   *  单机与联机共用——联机时上面那些出牌函数根本不会运行，
+   *  所以声音和飘字统一按「状态差异」触发，两种模式都有。
+   * ============================================================ */
+  const SEAT_ANCHOR = [
+    { x: VW / 2, y: VH - 300 },   // 我（牌河在自己上方那一带）
+    { x: VW - 300, y: VH / 2 },   // 下家（右）
+    { x: VW / 2, y: 150 },        // 对家（上）
+    { x: 176, y: VH / 2 }         // 上家（左）
+  ];
+
+  var FLOATERS = [];       // [{text, sub, x, y, t0, dur, color, size}]
+  var evtSeen = null;      // {discards:[n×4], melds:[n×4], winner}
+
+  function floatText(text, x, y, color, size, sub) {
+    FLOATERS.push({
+      text: text, sub: sub || '', x: x, y: y,
+      t0: Date.now(), dur: 1500,
+      color: color || '#ffe9a8', size: size || 26
+    });
+    if (FLOATERS.length > 12) FLOATERS.shift();
+  }
+
+  function meldKind(m) {
+    const t = String((m && (m.type || m.kind)) || '');
+    if (t.indexOf('kan') >= 0) return 'kan';
+    if (t.indexOf('pon') >= 0 || t.indexOf('peng') >= 0) return 'pon';
+    return '';
+  }
+
+  function seatOfWinner() {
+    if (!G.winner) return null;
+    const v = (G.winner.p !== undefined) ? G.winner.p : G.winner.seat;
+    return (v === undefined) ? null : v;
+  }
+
+  // 返回 true 表示这一帧有新事件（用于触发重绘）
+  function watchEvents() {
+    const ps = G.players;
+    if (!ps || !ps[0] || G.phase === 'title') { evtSeen = null; return false; }
+
+    if (!evtSeen) {
+      // 第一次看到：只记录状态，不补放历史音效
+      evtSeen = {
+        discards: ps.map(function (p) { return (p.discards || []).length; }),
+        melds: ps.map(function (p) { return (p.melds || []).length; }),
+        winner: seatOfWinner()
+      };
+      return false;
+    }
+
+    let fired = false;
+    for (let p = 0; p < 4; p++) {
+      const pl = ps[p] || {};
+      const discs = pl.discards || [];
+      const melds = pl.melds || [];
+      const a = SEAT_ANCHOR[p];
+
+      // —— 出牌 ——
+      if (discs.length > (evtSeen.discards[p] || 0)) {
+        floatText(T.label(discs[discs.length - 1]), a.x, a.y - 22, '#ffe9a8', 28);
+        if (p === 0) sfxDiscard(); else sfxRivalDiscard();
+        fired = true;
+      }
+
+      // —— 碰 / 杠 ——
+      const dn = melds.length - (evtSeen.melds[p] || 0);
+      if (dn > 0) {
+        for (let k = 0; k < dn; k++) {
+          const m = melds[melds.length - dn + k];
+          const kind = meldKind(m);
+          const tiles = (m && (m.tiles || m.cards)) || [];
+          const nm = tiles.length ? T.label(tiles[0]) : '';
+          if (kind === 'kan') {
+            floatText('杠', a.x, a.y - 36, '#8fd8ff', 36, nm);
+            sfxKan();
+          } else if (kind === 'pon') {
+            floatText('碰', a.x, a.y - 32, '#ffc978', 34, nm);
+            sfxPon();
+          }
+          fired = true;
+        }
+      }
+
+      evtSeen.discards[p] = discs.length;
+      evtSeen.melds[p] = melds.length;
+    }
+
+    // —— 胡牌 / 流局 ——
+    const wSeat = seatOfWinner();
+    if (wSeat !== evtSeen.winner) {
+      evtSeen.winner = wSeat;
+      if (wSeat !== null) {
+        floatText((G.winner && G.winner.selfDraw) ? '自摸' : '胡', VW / 2, VH * 0.40, '#ffe066', 46);
+        if (wSeat === 0) sfxHu(); else sfxOtherWin();
+        fired = true;
+      } else if (G.phase === 'over') {
+        floatText('流局', VW / 2, VH * 0.40, 'rgba(220,235,225,0.9)', 40);
+        sfxFlow();
+        fired = true;
+      }
+    }
+    return fired;
+  }
+
+  function drawFloaters() {
+    if (!FLOATERS.length) return;
+    const now = Date.now();
+    for (let i = FLOATERS.length - 1; i >= 0; i--) {
+      const f = FLOATERS[i];
+      const age = now - f.t0;
+      if (age > f.dur) { FLOATERS.splice(i, 1); continue; }
+      const k = age / f.dur;
+      const rise = 1 - Math.pow(1 - k, 2);
+      const y = f.y - 54 * rise;
+      const alpha = k < 0.1 ? (k / 0.1) : (k > 0.6 ? 1 - (k - 0.6) / 0.4 : 1);
+      const scale = k < 0.1 ? 0.74 + 0.26 * (k / 0.1) : 1;
+
+      ctx.save();
+      ctx.globalAlpha = Math.max(0, Math.min(1, alpha));
+      ctx.translate(f.x, y);
+      ctx.scale(scale, scale);
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.lineJoin = 'round';
+      ctx.font = '800 ' + f.size + 'px "PingFang SC","Microsoft YaHei",system-ui,sans-serif';
+      ctx.shadowColor = 'rgba(0,0,0,0.5)';
+      ctx.shadowBlur = 10;
+      ctx.lineWidth = 5;
+      ctx.strokeStyle = 'rgba(6,26,16,0.8)';
+      ctx.strokeText(f.text, 0, 0);
+      ctx.fillStyle = f.color;
+      ctx.fillText(f.text, 0, 0);
+      if (f.sub) {
+        ctx.font = '700 ' + Math.round(f.size * 0.58) + 'px "PingFang SC","Microsoft YaHei",system-ui,sans-serif';
+        ctx.lineWidth = 4;
+        ctx.strokeText(f.sub, 0, f.size * 0.88);
+        ctx.fillStyle = 'rgba(255,248,220,0.95)';
+        ctx.fillText(f.sub, 0, f.size * 0.88);
+      }
+      ctx.restore();
+    }
+  }
+
   function render() {
     applyTransform();
+    if (onlineRenderOverride && onlineRenderOverride()) return;
+    // 每帧先看看有没有新事件（出牌 / 碰 / 杠 / 胡），有就补上飘字与声音。
+    // 差异式实现，重复调用不会重复触发。
+    watchEvents();
+    renderScene();
+  }
+
+  // 只画牌桌本身（不含「这一帧要不要画」的判断），联机界面重绘时也调它
+  function renderScene() {
+    TEXTLOG.length = 0;
+
     ctx.fillStyle = '#0b1d13';
     ctx.fillRect(0, 0, VW, VH);
 
@@ -1312,6 +1555,8 @@
       renderTable();
       if (G.phase === 'over') renderOver();
     }
+    drawTurnClock();
+    drawFloaters();
     drawSystemButtons();
   }
 
@@ -1322,7 +1567,8 @@
     const cx = VW / 2;
     drawText('玩法：与三个电脑对局 · 点手牌出牌 · 碰 / 杠 / 胡会自动出现按钮', cx, VH * 0.52, 17, 'rgba(200,220,208,0.75)', 'center');
     drawText('本玩法不含「吃」 · 手机可全屏玩 · 右上角可开关声音', cx, VH * 0.585, 17, 'rgba(200,220,208,0.75)', 'center');
-    drawText('目标：凑齐四组面子（顺子或刻子）+ 一对将', cx, VH * 0.66, 16, 'rgba(200,220,208,0.55)', 'center');
+    drawText('每人 30 秒思考时间 · 超时会替你自动出牌', cx, VH * 0.632, 17, 'rgba(255,214,120,0.85)', 'center');
+    drawText('目标：凑齐四组面子（顺子或刻子）+ 一对将', cx, VH * 0.682, 16, 'rgba(200,220,208,0.55)', 'center');
 
     const bw = 200, bh = 58;
     const bx = cx - bw / 2, by = VH * 0.75;
@@ -1607,9 +1853,9 @@
       drawText(w.selfDraw ? '自摸' : '点炮：' + T.short(w.tile), cx, VH * 0.38, 20,
         'rgba(232,196,106,0.9)', 'center');
       // 展示赢家的手牌
-      const pl = G.players[w.p];
+      const pl = G.players[w.p] || G.players[0];
       const gap = 3, tw = TW * 0.8, th = TH * 0.8;
-      const total = pl.hand.length;
+      const total = (pl.hand || []).length;
       let x = cx - (total * (tw + gap) - gap) / 2;
       const y = VH * 0.46;
       for (const t of pl.hand) {
@@ -1647,6 +1893,7 @@
 
   function onTap(clientX, clientY) {
     const p = toLogical(clientX, clientY);
+    if (onlineTap && onlineTap(clientX, clientY) === true) { markDirty(); return; }
     const b = hit(buttonHit, p.x, p.y);
     if (b) { doAction(b.action); markDirty(); return; }
     if (G.phase === 'playing' && G.turn === 0 && G.waitingFor === 'discard' && !G.pendingClaim) {
@@ -1657,6 +1904,7 @@
 
   function playerDiscard(tile) {
     if (G.phase !== 'playing' || G.turn !== 0 || G.waitingFor !== 'discard') return;
+    if (onlineAction) { onlineAction('discard', tile); return; }
     discard(0, tile);
     recomputeTenpai();
     if (G.phase === 'playing' && G.waitingFor === 'ai') {
@@ -1669,13 +1917,23 @@
     if (a === 'fullscreen') { toggleFullscreen(); markDirty(); return; }
     if (a === 'start' || a === 'restart') {
       sfxTap();
+      // 联机模式下「开始/再来一局」由服务端发牌，不能在本地 resetGame
+      if (onlineAction) { onlineAction('again'); return; }
       // 手机上顺手进全屏（由用户点击触发，符合浏览器要求）
       if (isTouchDevice() && !fsElement()) enterFullscreen();
       resetGame();
       recomputeTenpai();
       return;
     }
-    if (a === 'pass') { sfxTap(); passClaim(); return; }
+    if (a === 'pass') { sfxTap(); if (onlineAction) { onlineAction('claim', null, 'pass'); return; } passClaim(); return; }
+    if (onlineAction && a === 'tsumo') { onlineAction('tsumo'); return; }
+    if (onlineAction && a.indexOf('ankan:') === 0) {
+      onlineAction('ankan', parseInt(a.split(':')[1], 10));
+      return;
+    }
+    if (onlineAction) {
+      if (a === 'hu' || a === 'kan' || a === 'pon') { onlineAction('claim', null, a); return; }
+    }
     if (a === 'tsumo') {
       declareWin(0, G.players[0].drawn, 0, true);
       return;
@@ -1733,6 +1991,7 @@
     if (k === 'm') { toggleMute(); }
     else if (k === 'f') { toggleFullscreen(); markDirty(); }
     else if (k === ' ' || k === 'enter') {
+      if (onlineRenderOverride) return;    // 联机界面用点击，不吃空格
       if (G.phase === 'title') doAction('start');
       else if (G.phase === 'over') doAction('restart');
       markDirty();
@@ -1773,7 +2032,7 @@
     // 桌面浏览器（鼠标）不显示竖屏提示
     if (show && !isTouchDevice()) document.body.classList.remove('tip-on');
     // 桌面窗口尺寸稳定时这里不产生任何副作用（fit 内部已去重）
-    fit();
+    if (fit()) markDirty();
   }
 
   window.addEventListener('resize', tickOrientation);
@@ -1790,12 +2049,14 @@
   var lastPhase = null;
   var dirty = true;
   var lastAiStep = 0;
+  var lastClockSec = -1;
 
   function markDirty() { dirty = true; }
 
   function tick() {
-    // AI 兜底推进：状态真的停在等待 AI 时才动，且限速 260ms
-    if (G.phase === 'playing' && G.waitingFor === 'ai' && !G.pendingClaim) {
+    // 联机模式下 G 是服务端快照，waitingFor==='ai' 只代表「别人在思考」，
+    // 绝不能跑本地 AI——否则会用本地空牌墙 drawFor，直接把 phase 改成 over（踩过）
+    if (!onlineAction && G.phase === 'playing' && G.waitingFor === 'ai' && !G.pendingClaim) {
       const p = G.turn;
       const now = Date.now();
       if (p !== 0 && now - lastAiStep >= 260) {
@@ -1809,6 +2070,25 @@
       recomputeTenpai();
       dirty = true;
     }
+
+    // 出牌/碰/杠/胡 的飘字与音效（单机联机共用）
+    if (watchEvents()) dirty = true;
+    // 飘字还在动画中 → 持续重绘
+    if (FLOATERS.length) dirty = true;
+
+    // 30 秒没动 → 自动代打（仅单机；联机由服务端托管）
+    if (!onlineAction && G.phase === 'playing') {
+      const left = clockLeftMs();
+      if (left === 0) { autoPlay(); dirty = true; }
+      else if (left > 0) {
+        // 倒计时每秒重绘一次就够，别每帧都整屏重画
+        const sec = Math.ceil(left / 1000);
+        if (sec !== lastClockSec) { lastClockSec = sec; dirty = true; }
+      } else {
+        lastClockSec = -1;
+      }
+    }
+
     // 状态没变就不重绘 —— 这才是消除闪烁的关键
     if (dirty) {
       dirty = false;
@@ -1847,6 +2127,7 @@
     makeWall: makeWall,
     T: T,
     start: function () { resetGame(); recomputeTenpai(); },
+    resetToTitle: function () { G.phase = 'title'; render(); },
     discard: function (t) { playerDiscard(t); },
     action: function (a) { doAction(a); },
     // 测试钩子：真跑一遍所有音效（异常会抛出，交给测试断言）
@@ -1896,7 +2177,47 @@
       render();
     },
     fsSupported: fsSupported,
-    toggleFullscreen: toggleFullscreen
+    toggleFullscreen: toggleFullscreen,
+    // ---- 联机扩展点（单机模式下全部为 null，行为完全不变） ----
+    // 拿到内部 G 的引用，联机客户端往里面写服务端下发的视角
+    getG: function () { return G; },
+    // 单机开机（联机退回单人时用）
+    start: function () { resetGame(); recomputeTenpai(); markDirty(); },
+    // 替换整帧渲染：返回 true 表示这一帧由联机界面自己画
+    setRenderOverride: function (fn) { onlineRenderOverride = fn || null; markDirty(); },
+    // 改写动作出口：fn(null) 恢复单机，fn(fn) 交给联机发往服务器
+    setOnlineAction: function (fn) { onlineAction = fn || null; },
+    // 请求重绘（联机客户端改了 G 之后要它刷一帧）
+    markDirty: function () { markDirty(); },
+    // 原样调用单机渲染（联机客户端做局部重绘时用）
+    rawRender: function () { render(); },
+    // 强制立即重画：横竖屏切换时浏览器会在 canvas 被重设尺寸后清空位图，
+    // 而主循环只在有状态变化时才画，于是会留下一块纯黑，直到下一次状态变化。
+    redrawNow: function () { render(); },
+    // 当前 dpr/缩放（联机界面按屏幕坐标换算时用）
+    get viewInfo() { return { dpr: dpr, scale: scale, offX: offX, offY: offY, vw: VW, vh: VH }; },
+    // —— 30 秒时限 + 出牌飘字（自动化测试用）——
+    get turnLimit() { return TURN_LIMIT; },
+    clockLeft: function () { return clockLeftMs(); },
+    autoPlay: function () { autoPlay(); markDirty(); },
+    get clockAuto() { return clockAuto; },
+    // 把「已观察到的状态」设为当前状态（不补放音效），测试里可精准触发一次事件
+    resyncEvents: function () { evtSeen = null; watchEvents(); },
+    watchEvents: function () { return watchEvents(); },
+    get floaters() { return FLOATERS.map(function (f) { return { text: f.text, sub: f.sub }; }); },
+    get floaterCount() { return FLOATERS.length; },
+    get evtSeen() { return evtSeen ? JSON.parse(JSON.stringify(evtSeen)) : null; },
+    // 本帧画过的文字（版面自检：标题页文字有没有互相压住）
+    get texts() { return TEXTLOG.map(function (t) { return { s: t.s, x: t.x, y: t.y, size: t.size, align: t.align }; }); },
+    // 截图/演示用：放一个不会很快消失的飘字
+    demoFloater: function (text, sub) {
+      floatText(text || '三萬', VW / 2, VH * 0.52, '#ffe9a8', 34, sub || '');
+      const f = FLOATERS[FLOATERS.length - 1];
+      if (f) { f.t0 = Date.now() - 320; f.dur = 600000; }
+      render();
+      return f ? f.text : null;
+    },
+    clearFloaters: function () { FLOATERS.length = 0; }
   };
 
   // 自动化测试钩子：允许在加载前预置 __MJ_AUTOSTART / __MJ_AUTOPLAY

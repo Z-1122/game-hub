@@ -449,6 +449,100 @@ allInside(handFull, '满手牌');
 noOverlap(handFull, L2.buttons.filter((b) => b.action !== 'mute' && b.action !== 'fullscreen'),
   '满手牌不压操作按钮');
 
+/* ---------------- 10. 30 秒思考时限 + 出牌飘字 ----------------
+ * 用户需求：每人 30 秒思考时间，超时自动出牌；出牌时显示牌名并配碰撞声。 */
+console.log('\n10) 30 秒思考时限与出牌飘字');
+ok(dbg.turnLimit === 30000, '每人思考时限为 30 秒', '实际 ' + dbg.turnLimit + 'ms');
+
+dbg.start();
+dbg.resyncEvents();
+dbg.clearFloaters();
+// 开局轮到我出牌时，倒计时应在 (0, 30s] 之间且在往下走
+const left1 = dbg.clockLeft();
+ok(left1 > 0 && left1 <= 30000, '轮到我时开始 30 秒倒计时', Math.round(left1) + 'ms');
+
+// 出牌 → 应出现「牌名」飘字，并发出一声碰撞音
+// （直接往牌河里加牌模拟“某家打了一张”，避免 AI 实时抢碰把那张牌吃掉）
+dbg.clearFloaters();
+const bufBeforeDiscard = audioStats.buf;
+dbg.fillDiscards(0, 1);
+dbg.rawRender();
+const floaters = dbg.floaters;
+ok(floaters.length > 0, '出牌后出现了飘字提示', JSON.stringify(floaters));
+ok(floaters.some((f) => f.text === dbg.T.label(dbg.discards[0][0])),
+  '飘字显示的就是刚打出的那张牌的名字', JSON.stringify(floaters.map((f) => f.text)));
+ok(audioStats.buf > bufBeforeDiscard, '出牌真的发出了碰撞声',
+  'buf +' + (audioStats.buf - bufBeforeDiscard));
+
+// 别人出牌：也要有飘字，声音和摸牌不同（更实更闷一点）
+dbg.clearFloaters();
+const bufBeforeRival = audioStats.buf;
+dbg.fillDiscards(2, 1);
+dbg.rawRender();
+ok(dbg.floaters.some((f) => f.text === dbg.T.label(dbg.discards[2][0])),
+  '对家出牌也有牌名飘字', JSON.stringify(dbg.floaters.map((f) => f.text)));
+ok(audioStats.buf > bufBeforeRival, '别人出牌也有碰撞声');
+
+// 碰 / 杠 的飘字与音效
+dbg.clearFloaters();
+dbg.resyncEvents();
+dbg.fakeClaim();
+const bufBeforePon = audioStats.buf;
+const oscBeforePon = audioStats.osc;
+dbg.action('pon');
+dbg.rawRender();
+const ponFloaters = dbg.floaters;
+ok(ponFloaters.some((f) => f.text === '碰'), '碰牌时飘出「碰」字',
+  JSON.stringify(ponFloaters.map((f) => f.text)));
+ok(audioStats.buf > bufBeforePon && audioStats.osc > oscBeforePon,
+  '碰牌有独立的碰撞声与和弦');
+
+// 超时自动托管：不点任何东西，直接让时限到点
+dbg.start();
+dbg.resyncEvents();
+const beforeAuto = { discards: dbg.discards[0].length, auto: dbg.clockAuto };
+dbg.autoPlay();
+ok(dbg.clockAuto === beforeAuto.auto + 1, '超时自动代打被触发一次');
+ok(dbg.discards[0].length > beforeAuto.discards, '超时后自动替玩家打出了一张牌',
+  '牌河 ' + beforeAuto.discards + ' → ' + dbg.discards[0].length);
+
+// 超时遇到碰杠胡机会：能胡就胡，否则自动过
+dbg.start();
+dbg.fakeClaim();
+dbg.resyncEvents();
+dbg.autoPlay();
+ok(dbg.pendingClaim === null, '超时后自动处理了碰杠胡窗口（不会卡住）',
+  'pendingClaim=' + JSON.stringify(dbg.pendingClaim));
+
+/* 标题页文字不能挤在一起（新增了「每人 30 秒」那一行，最容易压到下一行） */
+dbg.start();
+dbg.resetToTitle();
+dbg.rawRender();
+const titleTexts = dbg.texts;
+const titleLines = titleTexts.filter((t) => t.size >= 16 && t.y < 560);
+let titleBad = [];
+for (let i = 0; i < titleLines.length; i++) {
+  for (let j = i + 1; j < titleLines.length; j++) {
+    const a = titleLines[i], b = titleLines[j];
+    const dy = Math.abs(a.y - b.y);
+    if (dy < (a.size + b.size) * 0.55) {
+      titleBad.push(a.s + ' / ' + b.s + ' 间距 ' + Math.round(dy) + 'px');
+    }
+  }
+}
+ok(titleBad.length === 0, '标题页各行文字没有挤在一起', titleBad.slice(0, 3).join(' ; '));
+ok(titleTexts.some((t) => /30 秒/.test(t.s)), '标题页写明了 30 秒规则');
+const startBtnTexts = dbg.layout.buttons.filter((b) => b.action === 'start');
+ok(startBtnTexts.length === 1, '标题页仍有「开始游戏」按钮', '共 ' + startBtnTexts.length + ' 个');
+
+// 源码特征：倒计时与飘字必须留在渲染路径上
+ok(/function drawTurnClock/.test(script) && /drawTurnClock\(\)/.test(script), '倒计时画在渲染路径上');
+ok(/function watchEvents/.test(script) && /watchEvents\(\)/.test(script), '事件观察器接在主循环里');
+ok(/function floatText/.test(script) && /function drawFloaters/.test(script), '飘字生成与绘制函数齐全');
+ok(/function autoPlay/.test(script), '超时自动代打函数存在');
+ok(/TURN_LIMIT = 30000/.test(script), '源码里写死了 30 秒');
+ok(/function sfxRivalDiscard/.test(script), '别人出牌有独立的轻一些的碰撞声');
+
 /* ---------------- 结果 ---------------- */
 console.log('\n结果: ' + pass + ' 通过, ' + fail + ' 失败');
 process.exit(fail === 0 ? 0 : 1);
