@@ -77,8 +77,19 @@ function makeClient(name) {
   const st = await A.next((m) => m.t === 'state', 8000);
   ok(!!st && st.view.phase === 'playing', '开局成功');
   ok(st && st.turnMs === 30000, '服务端宣布每人 30 秒', st && st.turnMs);
-  ok(st && typeof st.turnLeft === 'number' && st.turnLeft > 0, '状态里带剩余思考时间',
-    st && Math.round(st.turnLeft) + 'ms');
+  // 骰子定庄后先手可能是电脑，那时没有人类倒计时（turnLeft 为 0 是正确的）；
+  // 等到轮到自己，才应该带上剩余思考时间。
+  let mineSt = null;
+  {
+    const t0 = Date.now();
+    while (Date.now() - t0 < 20000) {
+      const m = await A.next((x) => x.t === 'state', 600);
+      if (!m) continue;
+      if (m.view.waitingFor === 'me' || m.view.waitingFor === 'claim') { mineSt = m; break; }
+    }
+  }
+  ok(!!mineSt && typeof mineSt.turnLeft === 'number' && mineSt.turnLeft > 0,
+    '轮到自己时状态里带剩余思考时间', mineSt && Math.round(mineSt.turnLeft) + 'ms');
 
   console.log('\n[2] 30 秒到点自动出牌（真人全程不动）');
   const before = st.view.players[st.view.seat].discards.length;
