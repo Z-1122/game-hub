@@ -1476,9 +1476,9 @@
     const now = Date.now();
     for (let i = FLOATERS.length - 1; i >= 0; i--) {
       const f = FLOATERS[i];
-      const age = now - f.t0;
+      const age = f.freeze ? 0 : (now - f.t0);
       if (age > f.dur) { FLOATERS.splice(i, 1); continue; }
-      const k = age / f.dur;
+      const k = f.freeze ? 0.28 : age / f.dur;
       const rise = 1 - Math.pow(1 - k, 2);
       const y = f.y - 54 * rise;
       const alpha = k < 0.1 ? (k / 0.1) : (k > 0.6 ? 1 - (k - 0.6) / 0.4 : 1);
@@ -1542,7 +1542,7 @@
     drawFeltPattern();
 
     // 右下角极淡的构建标记
-    drawText('build ' + BUILD, VW - 16, VH - 13, 10, 'rgba(200,220,208,0.30)', 'right');
+    drawText('build ' + BUILD, VW / 2, VH - 9, 9, 'rgba(200,220,208,0.26)', 'center');
 
     handHit = [];
     buttonHit = [];
@@ -1606,8 +1606,8 @@
   function drawOpponent(p, cx, cy, side) {
     const pl = G.players[p];
     const vertical = (side === 'left' || side === 'right');
-    const tw = vertical ? TH * 0.62 : TW * 0.62;
-    const th = vertical ? TW * 0.62 : TH * 0.62;
+    const tw = vertical ? TW * 0.52 : TW * 0.62;
+    const th = vertical ? TH * 0.45 : TH * 0.62;
     const gap = 3;
 
     // 手牌（先画牌背，名字牌稍后画在上层，避免被牌挡掉——之前左右两家的名字就是这么消失的）
@@ -2210,10 +2210,10 @@
     // 本帧画过的文字（版面自检：标题页文字有没有互相压住）
     get texts() { return TEXTLOG.map(function (t) { return { s: t.s, x: t.x, y: t.y, size: t.size, align: t.align }; }); },
     // 截图/演示用：放一个不会很快消失的飘字
-    demoFloater: function (text, sub) {
-      floatText(text || '三萬', VW / 2, VH * 0.52, '#ffe9a8', 34, sub || '');
+    demoFloater: function (text, sub, x, y) {
+      floatText(text || '三萬', (typeof x === 'number' ? x : SEAT_ANCHOR[0].x), (typeof y === 'number' ? y : SEAT_ANCHOR[0].y), '#ffe9a8', 34, sub || '');
       const f = FLOATERS[FLOATERS.length - 1];
-      if (f) { f.t0 = Date.now() - 320; f.dur = 600000; }
+      if (f) { f.freeze = true; f.t0 = Date.now(); f.dur = 600000; }
       render();
       return f ? f.text : null;
     },

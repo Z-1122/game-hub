@@ -42,6 +42,7 @@ function cdpGet(path) {
     fs.writeFileSync(`E:\\LeStoreDownload\\shots2\\${n}.png`, Buffer.from(s.result.data, 'base64'));
   };
 
+  const failures = [];
   await call('Runtime.enable');
   await call('Emulation.setDeviceMetricsOverride', { width: 844, height: 390, deviceScaleFactor: 2, mobile: true });
   await call('Emulation.setTouchEmulationEnabled', { enabled: true, maxTouchPoints: 5 });
@@ -54,6 +55,32 @@ function cdpGet(path) {
   await evalJs(`Array.from(document.querySelectorAll('#mj-ui button')).find(b=>b.textContent.includes('开始游戏')).click()`);
   await sleep(3000);
   console.log('[开局]', await evalJs(`JSON.stringify({phase:window.__mjDebug.state, hand:window.__mjDebug.hand.length, wall:window.__mjDebug.wallLeft})`));
+
+  // 30 秒思考时限：轮到自己的时候右上角必须出现倒计时
+  await sleep(600);
+  const clock = await evalJs(`JSON.stringify((function(){
+    var e = document.getElementById('mj-clock');
+    return e ? { display: getComputedStyle(e).display, text: e.textContent } : null;
+  })())`);
+  console.log('[倒计时]', clock);
+  let clockOk = false;
+  try {
+    const c = JSON.parse(clock);
+    clockOk = !!c && c.display !== 'none' && /[0-9]+\s*秒/.test(c.text);
+  } catch (e) { /* 忽略 */ }
+  if (!clockOk) {
+    // 有可能刚好不是我的回合，再等一小会儿
+    for (let i = 0; i < 20 && !clockOk; i++) {
+      await sleep(400);
+      const c2 = await evalJs(`JSON.stringify((function(){
+        var e = document.getElementById('mj-clock');
+        return e ? { display: getComputedStyle(e).display, text: e.textContent } : null;
+      })())`);
+      const p = JSON.parse(c2);
+      if (p && p.display !== 'none' && /[0-9]+\s*秒/.test(p.text)) { clockOk = true; console.log('[倒计时]', c2); }
+    }
+  }
+  if (!clockOk) { console.log('[倒计时] 未出现'); failures.push('我的回合没有显示 30 秒倒计时'); }
 
   let steps = 0, overSeen = false, againTested = false;
   for (let i = 0; i < 300; i++) {
@@ -98,5 +125,6 @@ function cdpGet(path) {
 
   ws.close();
   try { process.kill(proc.pid); } catch (e) {}
-  process.exit(0);
+  if (failures.length) console.log('[失败]', failures.join(' | '));
+  process.exit(failures.length ? 1 : 0);
 })();

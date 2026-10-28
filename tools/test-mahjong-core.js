@@ -500,11 +500,13 @@ ok(audioStats.buf > bufBeforePon && audioStats.osc > oscBeforePon,
 // 超时自动托管：不点任何东西，直接让时限到点
 dbg.start();
 dbg.resyncEvents();
-const beforeAuto = { discards: dbg.discards[0].length, auto: dbg.clockAuto };
+const beforeAuto = { log: dbg.log.length, disc: dbg.discards[0].length, auto: dbg.clockAuto };
 dbg.autoPlay();
 ok(dbg.clockAuto === beforeAuto.auto + 1, '超时自动代打被触发一次');
-ok(dbg.discards[0].length > beforeAuto.discards, '超时后自动替玩家打出了一张牌',
-  '牌河 ' + beforeAuto.discards + ' → ' + dbg.discards[0].length);
+// 打出的牌有可能立刻被别人碰走（牌河会又变短），所以用「日志增长」判断推进
+ok(dbg.log.length > beforeAuto.log || dbg.discards[0].length > beforeAuto.disc,
+  '超时后自动替玩家打出了一张牌',
+  '日志 ' + beforeAuto.log + ' → ' + dbg.log.length + '，牌河 ' + beforeAuto.disc + ' → ' + dbg.discards[0].length);
 
 // 超时遇到碰杠胡机会：能胡就胡，否则自动过
 dbg.start();
