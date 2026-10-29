@@ -71,8 +71,51 @@
   /* 手机全屏（地址栏收起时）用动态视口高度，避免地址栏占位把画面往下压 */
   @supports (height: 100dvh) { #stage { height: 100dvh; } }
 </style>
+
+<style data-hub-nav="css">
+  #hub-nav {
+    position: fixed; top: 14px; left: 14px; z-index: 2147483000;
+    display: inline-flex; align-items: center; gap: 7px;
+    padding: 7px 14px 7px 11px; border-radius: 999px;
+    font-family: "Microsoft YaHei", "PingFang SC", system-ui, sans-serif;
+    font-size: 12.5px; font-weight: 600; line-height: 1;
+    color: #dff6ff; text-decoration: none; cursor: pointer;
+    background: rgba(8, 16, 28, 0.62);
+    border: 1px solid rgba(120, 200, 255, 0.28);
+    backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px);
+    box-shadow: 0 6px 22px -8px rgba(0, 0, 0, 0.75);
+    opacity: 0.55; transition: opacity .2s, transform .2s, border-color .2s;
+  }
+  #hub-nav:hover, #hub-nav:focus-visible {
+    opacity: 1; transform: translateY(-1px);
+    border-color: rgba(120, 200, 255, 0.65);
+    outline: none;
+  }
+  #hub-nav svg { width: 13px; height: 13px; flex: none; }
+
+  /* 浅色背景的游戏（如 2048）加 class="hub-nav-light" 覆盖配色。
+     注入时脚本会自动检测背景色并加上这个 class。 */
+  #hub-nav.hub-nav-light {
+    color: #3a332c;
+    background: rgba(255, 255, 255, 0.82);
+    border-color: rgba(120, 100, 80, 0.28);
+    box-shadow: 0 6px 20px -8px rgba(90, 75, 60, 0.45);
+  }
+  #hub-nav.hub-nav-light:hover, #hub-nav.hub-nav-light:focus-visible {
+    border-color: rgba(120, 100, 80, 0.55);
+  }
+  @media (max-width: 560px) {
+    #hub-nav { top: 10px; left: 10px; padding: 6px 11px 6px 9px; font-size: 12px; }
+  }
+  @media print { #hub-nav { display: none; } }
+</style>
 </head>
 <body>
+<a id="hub-nav" href="../index.html" title="返回游戏小屋" aria-label="返回游戏小屋">
+<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 18l-6-6 6-6"/></svg>
+游戏小屋
+</a>
+
 <div id="stage"><canvas id="cv"></canvas></div>
 <div id="rotate-tip">
   <div class="phone"></div>

@@ -1,0 +1,862 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>深潜地牢</title>
+<style>
+  :root {
+    --bg: #070a12;
+    --panel: #111827;
+    --line: rgba(255, 255, 255, .08);
+    --text: #dbe4f5;
+    --dim: #7c89a3;
+    --accent: #4fd1c5;
+    --danger: #ff5d6c;
+  }
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  html, body { height: 100%; }
+  body {
+    margin: 0;
+    background: radial-gradient(900px 700px at 50% -20%, #14203a 0%, var(--bg) 65%);
+    color: var(--text);
+    font-family: "Consolas", "Cascadia Mono", ui-monospace, "Microsoft YaHei", monospace;
+    display: flex; justify-content: center;
+    padding: 10px 10px calc(10px + env(safe-area-inset-bottom));
+  }
+  .wrap { width: 100%; max-width: 980px; display: flex; flex-direction: column; gap: 8px; }
+
+  .hud {
+    display: flex; flex-wrap: wrap; align-items: center; gap: 8px;
+    background: var(--panel); border: 1px solid var(--line); border-radius: 12px;
+    padding: 8px 12px; font-size: 13px;
+  }
+  .hud b { color: var(--accent); }
+  .hud .sp { flex: 1; }
+  .hpbar {
+    position: relative; width: 140px; height: 12px; border-radius: 6px;
+    background: #1f2937; overflow: hidden; border: 1px solid var(--line);
+  }
+  .hpbar i { position: absolute; inset: 0; width: 100%; background: linear-gradient(90deg, #ff5d6c, #ff8a5b); transition: width .15s; }
+  .hpbar span { position: absolute; inset: 0; font-size: 10px; text-align: center; line-height: 12px; color: #fff; text-shadow: 0 1px 2px #000; }
+
+  .stage { position: relative; border-radius: 14px; background: #05080f; border: 1px solid var(--line); }
+  .stage .overlay { border-radius: 14px; }
+  canvas { display: block; width: 100%; height: auto; touch-action: none; }
+
+  .log {
+    height: 76px; overflow-y: auto; font-size: 12.5px; line-height: 1.55;
+    background: var(--panel); border: 1px solid var(--line); border-radius: 10px;
+    padding: 6px 10px; color: var(--dim);
+  }
+  .log div:last-child { color: var(--text); }
+  .log .good { color: #6ee7b7; }
+  .log .bad { color: var(--danger); }
+
+  .bottom { display: flex; gap: 10px; align-items: flex-start; }
+  .keys { flex: 1; font-size: 12px; color: var(--dim); line-height: 1.7; }
+  .pad { display: grid; grid-template-columns: repeat(3, 52px); grid-template-rows: repeat(3, 52px); gap: 6px; }
+  .pad button {
+    font: inherit; font-size: 18px; color: var(--accent); background: var(--panel);
+    border: 1px solid var(--line); border-radius: 10px; cursor: pointer;
+  }
+  .pad button:active { background: #1b2740; }
+  .pad .up { grid-area: 1/2; } .pad .left { grid-area: 2/1; }
+  .pad .right { grid-area: 2/3; } .pad .down { grid-area: 3/2; }
+  .pad .wait { grid-area: 2/2; font-size: 12px; color: var(--dim); }
+  .pad .use { grid-area: 3/3; font-size: 12px; }
+  .pad .stair { grid-area: 3/1; font-size: 12px; }
+
+  .overlay {
+    position: absolute; inset: 0; display: flex; flex-direction: column;
+    align-items: center; justify-content: center; gap: 12px; text-align: center;
+    background: rgba(4, 7, 13, .86); padding: 24px;
+  }
+  .overlay.hide { display: none; }
+  .overlay h2 { margin: 0; font-size: 26px; letter-spacing: .1em; }
+  .overlay p { margin: 0; color: var(--dim); font-size: 13px; line-height: 1.8; }
+  .overlay button {
+    font: inherit; font-weight: 700; letter-spacing: .1em; color: #04101a;
+    background: linear-gradient(180deg, #7ff3dc, #35c8b0); border: 0;
+    border-radius: 999px; padding: 11px 32px; cursor: pointer;
+  }
+  @media (max-width: 720px) {
+    .keys { display: none; }
+    .bottom { justify-content: center; }
+    .log { height: 60px; font-size: 12px; }
+  }
+</style>
+
+<style data-hub-nav="css">
+  #hub-nav {
+    position: fixed; top: 14px; left: 14px; z-index: 2147483000;
+    display: inline-flex; align-items: center; gap: 7px;
+    padding: 7px 14px 7px 11px; border-radius: 999px;
+    font-family: "Microsoft YaHei", "PingFang SC", system-ui, sans-serif;
+    font-size: 12.5px; font-weight: 600; line-height: 1;
+    color: #dff6ff; text-decoration: none; cursor: pointer;
+    background: rgba(8, 16, 28, 0.62);
+    border: 1px solid rgba(120, 200, 255, 0.28);
+    backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px);
+    box-shadow: 0 6px 22px -8px rgba(0, 0, 0, 0.75);
+    opacity: 0.55; transition: opacity .2s, transform .2s, border-color .2s;
+  }
+  #hub-nav:hover, #hub-nav:focus-visible {
+    opacity: 1; transform: translateY(-1px);
+    border-color: rgba(120, 200, 255, 0.65);
+    outline: none;
+  }
+  #hub-nav svg { width: 13px; height: 13px; flex: none; }
+
+  /* 浅色背景的游戏（如 2048）加 class="hub-nav-light" 覆盖配色。
+     注入时脚本会自动检测背景色并加上这个 class。 */
+  #hub-nav.hub-nav-light {
+    color: #3a332c;
+    background: rgba(255, 255, 255, 0.82);
+    border-color: rgba(120, 100, 80, 0.28);
+    box-shadow: 0 6px 20px -8px rgba(90, 75, 60, 0.45);
+  }
+  #hub-nav.hub-nav-light:hover, #hub-nav.hub-nav-light:focus-visible {
+    border-color: rgba(120, 100, 80, 0.55);
+  }
+  @media (max-width: 560px) {
+    #hub-nav { top: 10px; left: 10px; padding: 6px 11px 6px 9px; font-size: 12px; }
+  }
+  @media print { #hub-nav { display: none; } }
+</style>
+</head>
+<body>
+<a id="hub-nav" href="../index.html" title="返回游戏小屋" aria-label="返回游戏小屋">
+<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 18l-6-6 6-6"/></svg>
+游戏小屋
+</a>
+
+<div class="wrap">
+  <div class="hud">
+    <span>HP <b id="hpText">30/30</b></span>
+    <div class="hpbar"><i id="hpFill"></i><span id="hpInside"></span></div>
+    <span>层 <b id="depth">1</b></span>
+    <span>Lv <b id="level">1</b></span>
+    <span>ATK <b id="atk">5</b></span>
+    <span>DEF <b id="def">2</b></span>
+    <span>金币 <b id="gold">0</b></span>
+    <span class="sp"></span>
+    <span id="potionInfo">药水 ×2</span>
+  </div>
+
+  <div class="stage">
+    <canvas id="game"></canvas>
+    <div class="overlay" id="overlay">
+      <h2 id="ovTitle">深潜地牢</h2>
+      <p id="ovTip">
+        你是一名下潜者，要在 8 层深处找到并击败<strong>深渊领主</strong>。<br>
+        方向键 / WASD 移动与攻击 · 空格等待 · E 喝药 · &gt; 下楼<br>
+        撞向怪物即攻击，视野外的一切你看不见。
+      </p>
+      <button id="btn">开始下潜</button>
+    </div>
+  </div>
+
+  <div class="log" id="log"></div>
+
+  <div class="bottom">
+    <div class="keys">
+      WASD / 方向键：移动、攻击（撞上去就是砍）<br>
+      空格 / .：原地等待一回合　　E：喝治疗药水<br>
+      &gt; 或 G：站在楼梯上下一层　　R：重开一局
+    </div>
+    <div class="pad">
+      <button class="up" data-act="up">▲</button>
+      <button class="left" data-act="left">◀</button>
+      <button class="wait" data-act="wait">等待</button>
+      <button class="right" data-act="right">▶</button>
+      <button class="down" data-act="down">▼</button>
+      <button class="stair" data-act="stair">&gt;</button>
+      <button class="use" data-act="use">药</button>
+    </div>
+  </div>
+</div>
+
+<script>
+(function () {
+  'use strict';
+
+  var MAP_W = 46;
+  var MAP_H = 28;
+  var MAX_DEPTH = 8;
+  var FOV_RADIUS = 7;
+  var WALL = 1;
+  var FLOOR = 0;
+  var STAIRS = 2;
+
+  var canvas = document.getElementById('game');
+  var ctx = canvas.getContext('2d');
+  var logEl = document.getElementById('log');
+  var overlay = document.getElementById('overlay');
+  var ovTitle = document.getElementById('ovTitle');
+  var ovTip = document.getElementById('ovTip');
+  var btn = document.getElementById('btn');
+  var hpText = document.getElementById('hpText');
+  var hpFill = document.getElementById('hpFill');
+  var hpInside = document.getElementById('hpInside');
+  var depthEl = document.getElementById('depth');
+  var levelEl = document.getElementById('level');
+  var atkEl = document.getElementById('atk');
+  var defEl = document.getElementById('def');
+  var goldEl = document.getElementById('gold');
+  var potionInfo = document.getElementById('potionInfo');
+
+  var G = null;
+  var tile = 16;
+  var dpr = 1;
+  var running = false;
+
+  function rnd(n) { return Math.floor(Math.random() * n); }
+  function rint(a, b) { return a + rnd(b - a + 1); }
+  function chance(p) { return Math.random() < p; }
+
+  function log(msg, cls) {
+    var d = document.createElement('div');
+    d.textContent = msg;
+    if (cls) d.className = cls;
+    logEl.appendChild(d);
+    while (logEl.children.length > 60) logEl.removeChild(logEl.firstChild);
+    logEl.scrollTop = logEl.scrollHeight;
+  }
+
+  function idx(x, y) { return y * MAP_W + x; }
+  function inBounds(x, y) { return x >= 0 && y >= 0 && x < MAP_W && y < MAP_H; }
+
+  function newGrid(v) {
+    var a = new Array(MAP_W * MAP_H);
+    for (var i = 0; i < a.length; i++) a[i] = v;
+    return a;
+  }
+
+  function emptyGame() {
+    return {
+      depth: 0,
+      map: null,
+      seen: null,
+      vis: null,
+      player: null,
+      monsters: [],
+      items: [],
+      stairs: null,
+      turns: 0,
+      over: false
+    };
+  }
+
+  // ---------- 地图生成 ----------
+
+  function makeLevel(depth) {
+    var map = newGrid(WALL);
+    var rooms = [];
+    var tries = 0;
+
+    while (rooms.length < 7 && tries < 260) {
+      tries++;
+      var w = rint(5, 10);
+      var h = rint(4, 7);
+      var x = rint(1, MAP_W - w - 2);
+      var y = rint(1, MAP_H - h - 2);
+
+      var overlap = false;
+      for (var i = 0; i < rooms.length; i++) {
+        var r = rooms[i];
+        if (x - 1 < r.x + r.w + 1 && x + w + 1 > r.x - 1 &&
+            y - 1 < r.y + r.h + 1 && y + h + 1 > r.y - 1) { overlap = true; break; }
+      }
+      if (overlap) continue;
+
+      rooms.push({ x: x, y: y, w: w, h: h, cx: Math.floor(x + w / 2), cy: Math.floor(y + h / 2) });
+
+      for (var yy = y; yy < y + h; yy++) {
+        for (var xx = x; xx < x + w; xx++) map[idx(xx, yy)] = FLOOR;
+      }
+    }
+
+    function carveH(x1, x2, y) {
+      var a = Math.min(x1, x2), b = Math.max(x1, x2);
+      for (var x = a; x <= b; x++) map[idx(x, y)] = FLOOR;
+    }
+    function carveV(y1, y2, x) {
+      var a = Math.min(y1, y2), b = Math.max(y1, y2);
+      for (var y = a; y <= b; y++) map[idx(x, y)] = FLOOR;
+    }
+
+    for (var k = 1; k < rooms.length; k++) {
+      var prev = rooms[k - 1], cur = rooms[k];
+      if (chance(0.5)) {
+        carveH(prev.cx, cur.cx, prev.cy);
+        carveV(prev.cy, cur.cy, cur.cx);
+      } else {
+        carveV(prev.cy, cur.cy, prev.cx);
+        carveH(prev.cx, cur.cx, cur.cy);
+      }
+    }
+
+    var first = rooms[0];
+    var last = rooms[rooms.length - 1];
+    map[idx(last.cx, last.cy)] = STAIRS;
+
+    return { map: map, rooms: rooms, start: { x: first.cx, y: first.cy }, stairs: { x: last.cx, y: last.cy } };
+  }
+
+  function monsterForDepth(depth) {
+    var pool = [
+      { ch: 'r', name: '洞鼠', hp: 5, atk: 3, def: 0, xp: 4, gold: 2, color: '#c8a97e', minDepth: 1 },
+      { ch: 'g', name: '哥布林', hp: 9, atk: 4, def: 1, xp: 7, gold: 4, color: '#86c06c', minDepth: 1 },
+      { ch: 's', name: '骷髅兵', hp: 13, atk: 5, def: 2, xp: 12, gold: 6, color: '#d6dde8', minDepth: 2 },
+      { ch: 'z', name: '腐尸', hp: 18, atk: 6, def: 2, xp: 18, gold: 8, color: '#9b7fc4', minDepth: 3 },
+      { ch: 'o', name: '石魔', hp: 26, atk: 8, def: 4, xp: 28, gold: 12, color: '#8fa3b8', minDepth: 4 },
+      { ch: 'd', name: '深渊魔犬', hp: 22, atk: 10, def: 3, xp: 32, gold: 14, color: '#ff7b54', minDepth: 5 },
+      { ch: 'W', name: '深渊领主', hp: 90, atk: 14, def: 5, xp: 200, gold: 120, color: '#ff3d5a', minDepth: 99 }
+    ];
+    var avail = [];
+    for (var i = 0; i < pool.length; i++) if (depth >= pool[i].minDepth) avail.push(pool[i]);
+    return avail[rnd(avail.length)];
+  }
+
+  function spawnMonster(tpl, x, y, depth) {
+    var scale = 1 + (depth - 1) * 0.12;
+    return {
+      x: x, y: y,
+      ch: tpl.ch, name: tpl.name, color: tpl.color,
+      hp: Math.round(tpl.hp * scale),
+      maxHp: Math.round(tpl.hp * scale),
+      atk: Math.round(tpl.atk * (1 + (depth - 1) * 0.1)),
+      def: tpl.def,
+      xp: Math.round(tpl.xp * scale),
+      gold: tpl.gold
+    };
+  }
+
+  function buildLevel(depth) {
+    var lv = makeLevel(depth);
+    G.map = lv.map;
+    G.seen = newGrid(false);
+    G.vis = newGrid(false);
+    G.monsters = [];
+    G.items = [];
+    G.stairs = lv.stairs;
+    G.depth = depth;
+
+    G.player.x = lv.start.x;
+    G.player.y = lv.start.y;
+
+    var occupied = {};
+    occupied[idx(lv.start.x, lv.start.y)] = true;
+    occupied[idx(lv.stairs.x, lv.stairs.y)] = true;
+
+    var isBossFloor = depth === MAX_DEPTH;
+
+    var BOSS = { ch: 'W', name: '深渊领主', hp: 110, atk: 14, def: 5, xp: 200, gold: 120, color: '#ff3d5a' };
+
+    // 最后一层：倒数第二个房间清空，最后一个房间只放 boss
+    var bossRoomIndex = lv.rooms.length - 1;
+
+    for (var i = 1; i < lv.rooms.length; i++) {
+      var room = lv.rooms[i];
+      var isBossRoom = isBossFloor && i === bossRoomIndex;
+      var count = isBossRoom ? 1 : rint(1, 3);
+      if (isBossFloor && i === bossRoomIndex - 1) count = 0;
+
+      for (var c = 0; c < count; c++) {
+        var x, y, guard = 0;
+        do {
+          x = rint(room.x, room.x + room.w - 1);
+          y = rint(room.y, room.y + room.h - 1);
+          guard++;
+        } while (occupied[idx(x, y)] && guard < 40);
+        if (occupied[idx(x, y)]) continue;
+        occupied[idx(x, y)] = true;
+
+        var tpl = isBossRoom ? BOSS : monsterForDepth(depth);
+        var mo = spawnMonster(tpl, x, y, depth);
+        if (isBossRoom) {
+          mo.hp = BOSS.hp; mo.maxHp = BOSS.hp; mo.atk = BOSS.atk; mo.def = BOSS.def;
+          mo.boss = true;
+        }
+        G.monsters.push(mo);
+      }
+    }
+
+    var itemCount = rint(2, 3);
+    for (var j = 0; j < itemCount; j++) {
+      var rx, ry, g2 = 0;
+      var targetRoom = lv.rooms[rint(0, lv.rooms.length - 1)];
+      do {
+        rx = rint(targetRoom.x, targetRoom.x + targetRoom.w - 1);
+        ry = rint(targetRoom.y, targetRoom.y + targetRoom.h - 1);
+        g2++;
+      } while (occupied[idx(rx, ry)] && g2 < 40);
+      if (occupied[idx(rx, ry)]) continue;
+      occupied[idx(rx, ry)] = true;
+
+      var roll = Math.random();
+      if (roll < 0.55) {
+        G.items.push({ x: rx, y: ry, kind: 'potion', ch: '!', color: '#7dd3fc', name: '治疗药水' });
+      } else if (roll < 0.8) {
+        G.items.push({ x: rx, y: ry, kind: 'weapon', ch: '/', color: '#fbbf24', name: '锐刃', atk: 1 + Math.floor(depth / 3) });
+      } else {
+        G.items.push({ x: rx, y: ry, kind: 'armor', ch: '[', color: '#a78bfa', name: '护甲', def: 1 + Math.floor(depth / 4) });
+      }
+    }
+  }
+
+  // ---------- 视野 ----------
+
+  function computeFOV() {
+    var p = G.player;
+    var vis = G.vis, seen = G.seen;
+    for (var i = 0; i < vis.length; i++) vis[i] = false;
+
+    vis[idx(p.x, p.y)] = true;
+    seen[idx(p.x, p.y)] = true;
+
+    for (var y = p.y - FOV_RADIUS; y <= p.y + FOV_RADIUS; y++) {
+      for (var x = p.x - FOV_RADIUS; x <= p.x + FOV_RADIUS; x++) {
+        if (!inBounds(x, y)) continue;
+        var dx = x - p.x, dy = y - p.y;
+        if (dx * dx + dy * dy > FOV_RADIUS * FOV_RADIUS) continue;
+        if (lineClear(p.x, p.y, x, y)) {
+          vis[idx(x, y)] = true;
+          seen[idx(x, y)] = true;
+        }
+      }
+    }
+  }
+
+  function lineClear(x0, y0, x1, y1) {
+    var dx = Math.abs(x1 - x0), dy = Math.abs(y1 - y0);
+    var sx = x0 < x1 ? 1 : -1, sy = y0 < y1 ? 1 : -1;
+    var err = dx - dy;
+    var x = x0, y = y0;
+    var guard = 0;
+
+    while (guard++ < 200) {
+      if (x === x1 && y === y1) return true;
+      var e2 = 2 * err;
+      if (e2 > -dy) { err -= dy; x += sx; }
+      if (e2 < dx) { err += dx; y += sy; }
+      if (x === x1 && y === y1) return true;
+      if (!inBounds(x, y)) return false;
+      if (G.map[idx(x, y)] === WALL) return false;
+    }
+    return false;
+  }
+
+  // ---------- 战斗 ----------
+
+  function damageCalc(atk, def) {
+    var raw = atk + rint(0, 2) - def;
+    return Math.max(1, raw);
+  }
+
+  function playerAttack(m) {
+    var dmg = damageCalc(G.player.atk, m.def);
+    m.hp -= dmg;
+    log('你砍向' + m.name + '，造成 ' + dmg + ' 点伤害。');
+
+    if (m.hp <= 0) {
+      log(m.name + '倒下了。', 'good');
+      G.player.gold += m.gold;
+      G.player.xp += m.xp;
+      var i = G.monsters.indexOf(m);
+      if (i >= 0) G.monsters.splice(i, 1);
+      checkLevelUp();
+      if (m.name === '深渊领主') {
+        endGame(true);
+      }
+    }
+  }
+
+  function checkLevelUp() {
+    var p = G.player;
+    while (p.xp >= p.next) {
+      p.xp -= p.next;
+      p.level++;
+      p.maxHp += 8;
+      p.hp = Math.min(p.maxHp, p.hp + 8);
+      p.atk += 1;
+      p.def += 1;
+      p.next = Math.round(p.next * 1.7);
+      log('升级！你现在是 ' + p.level + ' 级。', 'good');
+    }
+  }
+
+  function monsterTurn() {
+    var p = G.player;
+
+    for (var i = 0; i < G.monsters.length; i++) {
+      var m = G.monsters[i];
+      if (m.hp <= 0) continue;
+
+      var dx = p.x - m.x, dy = p.y - m.y;
+      var dist = Math.abs(dx) + Math.abs(dy);
+      var canSee = G.vis[idx(m.x, m.y)] && dist <= 8;
+
+      if (dist === 1) {
+        var dmg = damageCalc(m.atk, p.def);
+        p.hp -= dmg;
+        log(m.name + '攻击你，受到 ' + dmg + ' 点伤害。', 'bad');
+        if (p.hp <= 0) {
+          p.hp = 0;
+          endGame(false);
+          return;
+        }
+        continue;
+      }
+
+      if (!canSee && !chance(0.3)) continue;
+
+      var steps = [[Math.sign(dx), 0], [0, Math.sign(dy)]];
+      if (Math.abs(dy) > Math.abs(dx)) steps.reverse();
+
+      for (var s = 0; s < steps.length; s++) {
+        var nx = m.x + steps[s][0];
+        var ny = m.y + steps[s][1];
+        if (!inBounds(nx, ny)) continue;
+        if (G.map[idx(nx, ny)] === WALL) continue;
+        if (nx === p.x && ny === p.y) continue;
+        if (monsterAt(nx, ny)) continue;
+        m.x = nx; m.y = ny;
+        break;
+      }
+    }
+  }
+
+  function monsterAt(x, y) {
+    for (var i = 0; i < G.monsters.length; i++) {
+      if (G.monsters[i].x === x && G.monsters[i].y === y) return G.monsters[i];
+    }
+    return null;
+  }
+
+  // ---------- 行动 ----------
+
+  function tryMove(dx, dy) {
+    if (!running || G.over) return;
+    var p = G.player;
+    var nx = p.x + dx, ny = p.y + dy;
+    if (!inBounds(nx, ny)) return;
+
+    var m = monsterAt(nx, ny);
+    if (m) {
+      playerAttack(m);
+      afterAction();
+      return;
+    }
+
+    if (G.map[idx(nx, ny)] === WALL) {
+      log('那是墙。');
+      return;
+    }
+
+    p.x = nx;
+    p.y = ny;
+    pickUpHere();
+    afterAction();
+  }
+
+  function pickUpHere() {
+    var p = G.player;
+    for (var i = G.items.length - 1; i >= 0; i--) {
+      var it = G.items[i];
+      if (it.x !== p.x || it.y !== p.y) continue;
+      G.items.splice(i, 1);
+
+      if (it.kind === 'potion') {
+        p.potions++;
+        log('拾取：治疗药水（共 ' + p.potions + ' 瓶）。', 'good');
+      } else if (it.kind === 'weapon') {
+        p.atk += it.atk;
+        log('拾取：' + it.name + '，攻击 +' + it.atk + '。', 'good');
+      } else {
+        p.def += it.def;
+        log('拾取：' + it.name + '，防御 +' + it.def + '。', 'good');
+      }
+    }
+  }
+
+  function afterAction() {
+    if (G.over) return;
+    G.turns++;
+    monsterTurn();
+    if (G.over) return;
+    computeFOV();
+    render();
+    updateHUD();
+    checkStairsPrompt();
+  }
+
+  function checkStairsPrompt() {
+    var p = G.player;
+    if (G.map[idx(p.x, p.y)] === STAIRS) {
+      log('这里有一段向下的阶梯，按 > （或 G）继续下潜。');
+    }
+  }
+
+  function descend() {
+    if (!running || G.over) return;
+    var p = G.player;
+    if (G.map[idx(p.x, p.y)] !== STAIRS) {
+      log('这里没有阶梯。');
+      return;
+    }
+    if (G.depth >= MAX_DEPTH) {
+      log('这已经是最深处了，去击败深渊领主。');
+      return;
+    }
+    buildLevel(G.depth + 1);
+    computeFOV();
+    render();
+    updateHUD();
+    log('你下潜到了第 ' + G.depth + ' 层。');
+  }
+
+  function usePotion() {
+    if (!running || G.over) return;
+    var p = G.player;
+    if (p.potions <= 0) {
+      log('你没有药水了。');
+      return;
+    }
+    if (p.hp >= p.maxHp) {
+      log('你现在状态很好，不需要喝药。');
+      return;
+    }
+    p.potions--;
+    var heal = Math.min(p.maxHp - p.hp, 12 + Math.floor(p.maxHp * 0.25));
+    p.hp += heal;
+    log('你喝下药水，恢复了 ' + heal + ' 点生命。', 'good');
+    afterAction();
+  }
+
+  function waitTurn() {
+    if (!running || G.over) return;
+    afterAction();
+  }
+
+  function endGame(win) {
+    G.over = true;
+    running = false;
+    overlay.classList.remove('hide');
+    if (win) {
+      ovTitle.textContent = '深渊已静';
+      ovTip.innerHTML = '你击败了深渊领主，地牢重归寂静。<br>层数 ' + G.depth + ' · 等级 ' + G.player.level + ' · 金币 ' + G.player.gold;
+    } else {
+      ovTitle.textContent = '你倒下了';
+      ovTip.innerHTML = '地牢吞没了你，第 <b>' + G.depth + '</b> 层成了终点。<br>等级 ' + G.player.level + ' · 金币 ' + G.player.gold;
+    }
+    btn.textContent = '再来一次';
+    render();
+    updateHUD();
+  }
+
+  function newGame() {
+    G = emptyGame();
+    G.player = {
+      x: 0, y: 0, hp: 30, maxHp: 30, atk: 5, def: 2,
+      level: 1, xp: 0, next: 20, gold: 0, potions: 2
+    };
+    logEl.innerHTML = '';
+    buildLevel(1);
+    computeFOV();
+    running = true;
+    G.over = false;
+    overlay.classList.add('hide');
+    render();
+    updateHUD();
+    log('你进入地牢第 1 层。四周很暗。');
+  }
+
+  function updateHUD() {
+    var p = G.player;
+    var pct = Math.max(0, Math.round(p.hp / p.maxHp * 100));
+    hpFill.style.width = pct + '%';
+    hpText.textContent = p.hp + '/' + p.maxHp;
+    hpInside.textContent = p.hp + '/' + p.maxHp;
+    depthEl.textContent = String(G.depth);
+    levelEl.textContent = String(p.level);
+    atkEl.textContent = String(p.atk);
+    defEl.textContent = String(p.def);
+    goldEl.textContent = String(p.gold);
+    potionInfo.textContent = '药水 ×' + p.potions;
+  }
+
+  // ---------- 渲染 ----------
+
+  function resize() {
+    var stage = canvas.parentElement;
+    var availW = stage.clientWidth || 900;
+    var availH = window.innerHeight - 210;
+    var t = Math.floor(availW / MAP_W);
+    var byH = Math.floor(availH / MAP_H);
+    // 窗口矮时取高度约束，保证画布 + 日志 + 方向键都在首屏；同时不超宽
+    if (byH >= 8 && byH < t) t = byH;
+    if (t < 8) t = 8;
+    if (t * MAP_W > availW) t = Math.max(6, Math.floor(availW / MAP_W));
+    tile = t;
+    dpr = Math.min(window.devicePixelRatio || 1, 2);
+    canvas.width = Math.round(MAP_W * tile * dpr);
+    canvas.height = Math.round(MAP_H * tile * dpr);
+    canvas.style.width = (MAP_W * tile) + 'px';
+    canvas.style.height = (MAP_H * tile) + 'px';
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    if (G) render();
+  }
+
+  function render() {
+    if (!G || !G.map) return;
+    var w = MAP_W * tile;
+    var h = MAP_H * tile;
+
+    ctx.fillStyle = '#05080f';
+    ctx.fillRect(0, 0, w, h);
+
+    for (var y = 0; y < MAP_H; y++) {
+      for (var x = 0; x < MAP_W; x++) {
+        var i = idx(x, y);
+        if (!G.seen[i]) continue;
+
+        var px = x * tile, py = y * tile;
+        var v = G.map[i];
+
+        if (v === WALL) {
+          ctx.fillStyle = G.vis[i] ? '#2a3448' : '#161d2b';
+        } else {
+          ctx.fillStyle = G.vis[i] ? '#131c2c' : '#0b111b';
+        }
+        ctx.fillRect(px, py, tile, tile);
+
+        if (v === WALL && G.vis[i]) {
+          ctx.fillStyle = 'rgba(255,255,255,0.045)';
+          ctx.fillRect(px, py, tile, Math.max(1, tile * 0.12));
+        }
+
+        if (v === STAIRS && G.vis[i]) {
+          ctx.fillStyle = '#facc15';
+          ctx.fillRect(px + tile * 0.2, py + tile * 0.2, tile * 0.6, tile * 0.6);
+        }
+      }
+    }
+
+    var i2, it;
+    for (i2 = 0; i2 < G.items.length; i2++) {
+      it = G.items[i2];
+      if (!G.vis[idx(it.x, it.y)]) continue;
+      drawGlyph(it.ch, it.color, it.x, it.y);
+    }
+
+    for (i2 = 0; i2 < G.monsters.length; i2++) {
+      var mo = G.monsters[i2];
+      if (!G.vis[idx(mo.x, mo.y)]) continue;
+      drawGlyph(mo.ch, mo.color, mo.x, mo.y);
+      if (mo.hp < mo.maxHp) {
+        var bw = tile * 0.8;
+        var r = mo.hp / mo.maxHp;
+        ctx.fillStyle = 'rgba(0,0,0,0.6)';
+        ctx.fillRect(mo.x * tile + tile * 0.1, mo.y * tile + tile * 0.02, bw, Math.max(2, tile * 0.09));
+        ctx.fillStyle = r > 0.5 ? '#4ade80' : (r > 0.25 ? '#fbbf24' : '#ef4444');
+        ctx.fillRect(mo.x * tile + tile * 0.1, mo.y * tile + tile * 0.02, bw * r, Math.max(2, tile * 0.09));
+      }
+    }
+
+    drawGlyph('@', '#4fd1c5', G.player.x, G.player.y);
+  }
+
+  function drawGlyph(ch, color, gx, gy) {
+    ctx.fillStyle = color;
+    ctx.font = '700 ' + Math.round(tile * 0.72) + 'px Consolas, monospace';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(ch, gx * tile + tile / 2, gy * tile + tile / 2 + 1);
+  }
+
+  // ---------- 输入 ----------
+
+  var DIRS = {
+    up: [0, -1], down: [0, 1], left: [-1, 0], right: [1, 0]
+  };
+
+  window.addEventListener('keydown', function (e) {
+    var k = e.key;
+    var handled = true;
+
+    if (k === 'ArrowUp' || k === 'w' || k === 'W') tryMove(0, -1);
+    else if (k === 'ArrowDown' || k === 's' || k === 'S') tryMove(0, 1);
+    else if (k === 'ArrowLeft' || k === 'a' || k === 'A') tryMove(-1, 0);
+    else if (k === 'ArrowRight' || k === 'd' || k === 'D') tryMove(1, 0);
+    else if (k === ' ' || k === '.') waitTurn();
+    else if (k === 'e' || k === 'E') usePotion();
+    else if (k === '>' || k === 'g' || k === 'G') descend();
+    else if (k === 'r' || k === 'R') newGame();
+    else handled = false;
+
+    if (handled) e.preventDefault();
+  }, { passive: false });
+
+  btn.addEventListener('click', function () {
+    btn.blur();
+    newGame();
+  });
+
+  var padEl = document.querySelector('.pad');
+  padEl.addEventListener('click', function (e) {
+    var b = e.target.closest('button[data-act]');
+    if (!b) return;
+    b.blur();
+    var act = b.getAttribute('data-act');
+    if (act === 'wait') waitTurn();
+    else if (act === 'use') usePotion();
+    else if (act === 'stair') descend();
+    else if (DIRS[act]) tryMove(DIRS[act][0], DIRS[act][1]);
+  });
+
+  var touchStart = null;
+  canvas.addEventListener('touchstart', function (e) {
+    var t0 = e.changedTouches[0];
+    touchStart = { x: t0.clientX, y: t0.clientY };
+  }, { passive: true });
+
+  canvas.addEventListener('touchend', function (e) {
+    if (!touchStart) return;
+    var t1 = e.changedTouches[0];
+    var dx = t1.clientX - touchStart.x;
+    var dy = t1.clientY - touchStart.y;
+    touchStart = null;
+    if (Math.abs(dx) < 20 && Math.abs(dy) < 20) return;
+    if (Math.abs(dx) > Math.abs(dy)) tryMove(dx > 0 ? 1 : -1, 0);
+    else tryMove(0, dy > 0 ? 1 : -1);
+    e.preventDefault();
+  }, { passive: false });
+
+  if (window.ResizeObserver) {
+    new window.ResizeObserver(function () { resize(); }).observe(canvas.parentElement);
+  } else {
+    window.addEventListener('resize', resize);
+  }
+
+  resize();
+  G = emptyGame();
+  G.player = { x: 0, y: 0, hp: 30, maxHp: 30, atk: 5, def: 2, level: 1, xp: 0, next: 20, gold: 0, potions: 2 };
+  buildLevel(1);
+  computeFOV();
+  render();
+  updateHUD();
+
+  window.__dungeon = {
+    get state() { return G; },
+    newGame: newGame,
+    tryMove: tryMove,
+    descend: descend,
+    waitTurn: waitTurn,
+    isRunning: function () { return running; }
+  };
+})();
+</script>
+</body>
+</html>
